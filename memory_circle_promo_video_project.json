@@ -1,0 +1,134 @@
+{
+  "project_name": "Memory Circle MVP Promo",
+  "version": "1.0",
+  "format": {
+    "primary_aspect_ratio": "16:9",
+    "resolution": "1920x1080",
+    "frame_rate": 30,
+    "duration_seconds": 75
+  },
+  "style": {
+    "mood": "warm, calm, family-oriented, modern nostalgic",
+    "visual_language": [
+      "paper texture backgrounds",
+      "soft shadows",
+      "rounded UI cards",
+      "gentle page-turn animation",
+      "family/community connection lines",
+      "minimal technical jargon"
+    ],
+    "music": "soft piano or acoustic background",
+    "voiceover_tone": "clear, warm, trustworthy"
+  },
+  "assets_needed": [
+    "Memory Circle logo or placeholder",
+    "phone gallery mockup",
+    "PC folder mockup",
+    "Google Drive icon placeholder",
+    "iCloud icon placeholder",
+    "OneDrive icon placeholder",
+    "family/community member silhouettes or photos",
+    "album flip animation placeholder",
+    "approval workflow UI mockup",
+    "desktop full-screen album mockup",
+    "mobile flip album mockup"
+  ],
+  "timeline": [
+    {
+      "scene": 1,
+      "title": "Scattered memories",
+      "start": 0,
+      "duration": 7,
+      "visual": "Photos scattered across phone, PC folder, cloud drive, and external archive placeholders.",
+      "voiceover": "Our memories are everywhere — on phones, laptops, cloud drives, and old family computers.",
+      "onscreen_text": "Photos everywhere. Stories scattered."
+    },
+    {
+      "scene": 2,
+      "title": "The problem",
+      "start": 7,
+      "duration": 8,
+      "visual": "Family members in different places asking for photos; duplicated albums; old photo frame.",
+      "voiceover": "But sharing them as real family stories is still difficult. Photos get lost, duplicated, or buried in endless galleries.",
+      "onscreen_text": "Sharing is easy. Curating memories is hard."
+    },
+    {
+      "scene": 3,
+      "title": "Introducing Memory Circle",
+      "start": 15,
+      "duration": 8,
+      "visual": "Logo placeholder appears; family/community nodes connect around a shared album.",
+      "voiceover": "Memory Circle creates a private shared space where families and communities build living memory albums together.",
+      "onscreen_text": "Introducing Memory Circle"
+    },
+    {
+      "scene": 4,
+      "title": "Keep photos where they are",
+      "start": 23,
+      "duration": 9,
+      "visual": "Source picker: Phone, PC, Google Drive, iCloud, OneDrive. Photos flow into album as references and display copies.",
+      "voiceover": "Your photos can stay where you already keep them — on your device, PC, Google Drive, iCloud, OneDrive, or external archive.",
+      "onscreen_text": "No forced migration. Connect what you already have."
+    },
+    {
+      "scene": 5,
+      "title": "Contribute memories",
+      "start": 32,
+      "duration": 8,
+      "visual": "User selects photo, adds caption, adds story, submits for approval.",
+      "voiceover": "Members add photos, captions, dates, events, and stories from any device.",
+      "onscreen_text": "Add photos + stories"
+    },
+    {
+      "scene": 6,
+      "title": "Approve and curate",
+      "start": 40,
+      "duration": 8,
+      "visual": "Approver screen with Approve, Edit & Approve, Request Changes, Reject.",
+      "voiceover": "Trusted members approve, edit, and curate what becomes part of the official album.",
+      "onscreen_text": "Trusted curation. Clean family albums."
+    },
+    {
+      "scene": 7,
+      "title": "Flip album display",
+      "start": 48,
+      "duration": 12,
+      "visual": "Desktop two-page spread, tap-to-flip, mobile swipe version, fullscreen display mode.",
+      "voiceover": "Approved memories appear in a beautiful tap-to-flip album — on PCs, phones, tablets, and living-room screens.",
+      "onscreen_text": "A classic album, rebuilt for connected families."
+    },
+    {
+      "scene": 8,
+      "title": "Archive confidence",
+      "start": 60,
+      "duration": 8,
+      "visual": "Album health screen: display copies available offline, full archive device planned, cloud backup optional.",
+      "voiceover": "Memory Circle keeps the album organized, cached, and ready for future archive protection.",
+      "onscreen_text": "Designed for long-term memory protection"
+    },
+    {
+      "scene": 9,
+      "title": "Closing",
+      "start": 68,
+      "duration": 7,
+      "visual": "Album flips slowly; members connected around it; logo and tagline.",
+      "voiceover": "Memory Circle: everyone contributes, trusted people curate, and the album lives everywhere.",
+      "onscreen_text": "Memory Circle\nEveryone contributes. Trusted people curate. The album lives everywhere."
+    }
+  ],
+  "export_variants": [
+    {
+      "name": "Main landscape",
+      "aspect_ratio": "16:9",
+      "resolution": "1920x1080",
+      "duration_seconds": 75
+    },
+    {
+      "name": "Short mobile teaser",
+      "aspect_ratio": "9:16",
+      "resolution": "1080x1920",
+      "duration_seconds": 30,
+      "status": "future cutdown"
+    }
+  ]
+}

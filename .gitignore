@@ -1,0 +1,19 @@
+.DS_Store
+._*
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+backend/api/memory_circle.db
+backend/api/storage/
+
+# Flutter
+apps/mobile_desktop_flutter/.dart_tool/
+apps/mobile_desktop_flutter/build/
+apps/mobile_desktop_flutter/.flutter-plugins
+apps/mobile_desktop_flutter/.flutter-plugins-dependencies
+
+# IDE
+.idea/
+*.iml
+.vscode/

@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mlt LC_NUMERIC="C" version="7.0.0" title="Memory Circle MVP Promo" producer="main_bin">
+  <profile description="HD 1080p 30 fps" width="1920" height="1080" progressive="1" sample_aspect_num="1" sample_aspect_den="1" display_aspect_num="16" display_aspect_den="9" frame_rate_num="30" frame_rate_den="1" colorspace="709"/>
+
+  <producer id="scene1">
+    <property name="resource">#263238</property>
+    <property name="mlt_service">color</property>
+    <property name="length">210</property>
+    <property name="kdenlive:clipname">Scene 1 - Scattered memories</property>
+  </producer>
+  <producer id="scene2">
+    <property name="resource">#37474F</property>
+    <property name="mlt_service">color</property>
+    <property name="length">240</property>
+    <property name="kdenlive:clipname">Scene 2 - The problem</property>
+  </producer>
+  <producer id="scene3">
+    <property name="resource">#1F4E79</property>
+    <property name="mlt_service">color</property>
+    <property name="length">240</property>
+    <property name="kdenlive:clipname">Scene 3 - Introducing Memory Circle</property>
+  </producer>
+  <producer id="scene4">
+    <property name="resource">#455A64</property>
+    <property name="mlt_service">color</property>
+    <property name="length">270</property>
+    <property name="kdenlive:clipname">Scene 4 - Keep photos where they are</property>
+  </producer>
+  <producer id="scene5">
+    <property name="resource">#546E7A</property>
+    <property name="mlt_service">color</property>
+    <property name="length">240</property>
+    <property name="kdenlive:clipname">Scene 5 - Contribute memories</property>
+  </producer>
+  <producer id="scene6">
+    <property name="resource">#607D8B</property>
+    <property name="mlt_service">color</property>
+    <property name="length">240</property>
+    <property name="kdenlive:clipname">Scene 6 - Approve and curate</property>
+  </producer>
+  <producer id="scene7">
+    <property name="resource">#78909C</property>
+    <property name="mlt_service">color</property>
+    <property name="length">360</property>
+    <property name="kdenlive:clipname">Scene 7 - Flip album display</property>
+  </producer>
+  <producer id="scene8">
+    <property name="resource">#90A4AE</property>
+    <property name="mlt_service">color</property>
+    <property name="length">240</property>
+    <property name="kdenlive:clipname">Scene 8 - Archive confidence</property>
+  </producer>
+  <producer id="scene9">
+    <property name="resource">#1F4E79</property>
+    <property name="mlt_service">color</property>
+    <property name="length">210</property>
+    <property name="kdenlive:clipname">Scene 9 - Closing</property>
+  </producer>
+
+  <playlist id="main_playlist">
+    <entry producer="scene1" in="0" out="209"/>
+    <entry producer="scene2" in="0" out="239"/>
+    <entry producer="scene3" in="0" out="239"/>
+    <entry producer="scene4" in="0" out="269"/>
+    <entry producer="scene5" in="0" out="239"/>
+    <entry producer="scene6" in="0" out="239"/>
+    <entry producer="scene7" in="0" out="359"/>
+    <entry producer="scene8" in="0" out="239"/>
+    <entry producer="scene9" in="0" out="209"/>
+  </playlist>
+
+  <tractor id="main_bin" title="Memory Circle MVP Promo">
+    <track producer="main_playlist"/>
+  </tractor>
+</mlt>
