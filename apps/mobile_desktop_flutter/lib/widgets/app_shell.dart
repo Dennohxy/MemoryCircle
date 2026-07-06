@@ -4,6 +4,7 @@ import '../api/api_client.dart';
 import '../api/models.dart';
 import '../screens/add_memory_screen.dart';
 import '../screens/albums_screen.dart';
+import '../screens/bulk_add_screen.dart';
 import '../screens/circle_dashboard_screen.dart';
 import '../screens/health_screen.dart';
 import '../screens/members_screen.dart';
@@ -16,6 +17,7 @@ import 'loading_state.dart';
 enum CircleSection {
   overview,
   addMemory,
+  bulkAdd,
   review,
   albums,
   members,
@@ -82,6 +84,12 @@ class _CircleShellState extends State<CircleShell> {
             label: 'Add a Memory',
             icon: Icons.add_photo_alternate_outlined
           ),
+        if (role.canContribute)
+          (
+            section: CircleSection.bulkAdd,
+            label: 'Add a Whole Album',
+            icon: Icons.photo_library_outlined
+          ),
         if (role.canReview)
           (
             section: CircleSection.review,
@@ -113,6 +121,7 @@ class _CircleShellState extends State<CircleShell> {
   String _titleFor(CircleSection section) => switch (section) {
         CircleSection.overview => 'Overview',
         CircleSection.addMemory => 'Add a Memory',
+        CircleSection.bulkAdd => 'Add a Whole Album',
         CircleSection.review => 'Review Memories',
         CircleSection.albums => 'My Albums',
         CircleSection.members => 'Family Members',
@@ -132,6 +141,11 @@ class _CircleShellState extends State<CircleShell> {
             api: widget.api,
             circle: _circle,
             onDone: _memorySent,
+          ),
+        CircleSection.bulkAdd => BulkAddView(
+            api: widget.api,
+            circle: _circle,
+            role: role,
           ),
         CircleSection.review =>
           MemoriesReviewView(api: widget.api, circle: _circle),

@@ -159,6 +159,13 @@ class _CircleDashboardViewState extends State<CircleDashboardView> {
           section: CircleSection.addMemory,
           emphasized: true,
         ),
+      if (widget.role.canContribute)
+        const _ActionSpec(
+          icon: Icons.photo_library_outlined,
+          title: 'Add a Whole Album',
+          subtitle: 'Bring in many photos at once',
+          section: CircleSection.bulkAdd,
+        ),
       if (widget.role.canReview)
         _ActionSpec(
           icon: Icons.fact_check_outlined,

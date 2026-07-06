@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../api/api_client.dart';
 import '../api/models.dart';
@@ -88,9 +90,84 @@ class _MembersViewState extends State<MembersView> {
       messenger.showSnackBar(const SnackBar(
         content: Text('They have been added to the circle.'),
       ));
+      await _shareInvite(input.email, input.name);
     } on ApiException catch (error) {
       messenger.showSnackBar(SnackBar(content: Text(error.message)));
     }
+  }
+
+  String _inviteMessage(String email, String name) {
+    final base = Uri.base;
+    // On the web this is the address the app is being used from; elsewhere
+    // fall back to the published app link.
+    final appUrl = base.scheme.startsWith('http')
+        ? '${base.scheme}://${base.authority}${base.path}'
+        : 'https://dennohxy.github.io/MemoryCircle/';
+    final inviter = widget.api.currentUser?.displayName ?? 'Your family';
+    final greeting = name.isEmpty ? 'Hello!' : 'Hello $name!';
+    return '$greeting\n\n'
+        '$inviter invited you to "${widget.circle.name}" on Memory Circle — '
+        'a private album for our family\'s photos and stories.\n\n'
+        '1. Open: $appUrl\n'
+        '2. Sign in with: $email\n'
+        '3. New to Memory Circle? Your temporary password is ChangeMe123!\n\n'
+        'See you in the album!';
+  }
+
+  /// Lets the owner send the invitation through WhatsApp, Messenger, SMS, or
+  /// any other app on their phone via the system share sheet.
+  Future<void> _shareInvite(String email, String name) async {
+    final message = _inviteMessage(email, name);
+    final messenger = ScaffoldMessenger.of(context);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Share the invitation'),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: Text(
+              message,
+              style: Theme.of(dialogContext)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: AppColors.softInk),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Done'),
+          ),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('Copy'),
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: message));
+              messenger.showSnackBar(const SnackBar(
+                content: Text('Invitation copied — paste it anywhere.'),
+              ));
+            },
+          ),
+          FilledButton.icon(
+            icon: const Icon(Icons.share, size: 18),
+            label: const Text('Share…'),
+            onPressed: () async {
+              try {
+                await Share.share(message, subject: 'Join our Memory Circle');
+              } catch (_) {
+                await Clipboard.setData(ClipboardData(text: message));
+                messenger.showSnackBar(const SnackBar(
+                  content: Text(
+                      'Sharing is not available here, so the invitation was copied instead.'),
+                ));
+              }
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   @override

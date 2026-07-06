@@ -141,3 +141,49 @@ def test_upload_rejects_non_images(client):
         headers=auth(contributor),
     )
     assert response.status_code == 400
+
+
+def test_upload_dedupe_and_hash_match(client):
+    circle_id, owner, approver, contributor, viewer = setup_circle(client)
+    photo_bytes = image_file(color=(120, 90, 200)).getvalue()
+
+    first = client.post(
+        f"/circles/{circle_id}/assets/upload",
+        files={"file": ("one.jpg", BytesIO(photo_bytes), "image/jpeg")},
+        headers=auth(owner),
+    )
+    assert first.status_code == 200, first.text
+
+    duplicate = client.post(
+        f"/circles/{circle_id}/assets/upload",
+        files={"file": ("copy-of-one.jpg", BytesIO(photo_bytes), "image/jpeg")},
+        headers=auth(contributor),
+    )
+    assert duplicate.status_code == 200, duplicate.text
+    assert duplicate.json()["id"] == first.json()["id"]
+
+    content_hash = first.json()["content_hash"]
+    match = client.post(
+        f"/circles/{circle_id}/assets/match",
+        json={"hashes": [content_hash, "deadbeef"]},
+        headers=auth(contributor),
+    )
+    assert match.status_code == 200, match.text
+    matches = match.json()["matches"]
+    assert content_hash in matches
+    assert matches[content_hash]["id"] == first.json()["id"]
+    assert "deadbeef" not in matches
+
+    empty = client.post(
+        f"/circles/{circle_id}/assets/match",
+        json={"hashes": []},
+        headers=auth(owner),
+    )
+    assert empty.json() == {"matches": {}}
+
+    denied = client.post(
+        f"/circles/{circle_id}/assets/match",
+        json={"hashes": [content_hash]},
+        headers=auth(viewer),
+    )
+    assert denied.status_code == 403

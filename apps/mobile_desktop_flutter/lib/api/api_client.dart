@@ -257,6 +257,23 @@ class ApiClient {
     return PhotoAsset.fromJson(_decode(response) as Map<String, dynamic>);
   }
 
+  /// Returns the circle's existing photos matching the given SHA-256
+  /// fingerprints, keyed by hash, so identical photos are linked instead of
+  /// uploaded again.
+  Future<Map<String, PhotoAsset>> matchPhotos(
+    int circleId,
+    List<String> hashes,
+  ) async {
+    final data = await _post('/circles/$circleId/assets/match', {
+      'hashes': hashes,
+    }) as Map<String, dynamic>;
+    final matches = data['matches'] as Map<String, dynamic>? ?? const {};
+    return {
+      for (final entry in matches.entries)
+        entry.key: PhotoAsset.fromJson(entry.value as Map<String, dynamic>),
+    };
+  }
+
   /// Fetches an image with the Authorization header so protected thumbnails
   /// and display images can be shown via `Image.memory`. Bytes are cached in
   /// memory for the session.
@@ -313,6 +330,16 @@ class ApiClient {
         Memory.fromJson(item as Map<String, dynamic>),
     ];
   }
+
+  Future<Memory> updateMemory(
+    int circleId,
+    int memoryId,
+    Map<String, dynamic> edits,
+  ) async =>
+      Memory.fromJson(await _patchJson(
+        '/circles/$circleId/memories/$memoryId',
+        edits,
+      ) as Map<String, dynamic>);
 
   /// Approves a memory, optionally applying caption/story edits in the same
   /// step (the approve endpoint accepts a patch body).

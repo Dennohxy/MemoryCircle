@@ -141,6 +141,7 @@ class PhotoAsset {
     required this.thumbnailUrl,
     required this.displayUrl,
     required this.originalFilename,
+    this.contentHash = '',
   });
 
   factory PhotoAsset.fromJson(Map<String, dynamic> json) => PhotoAsset(
@@ -148,12 +149,14 @@ class PhotoAsset {
         thumbnailUrl: _asText(json['thumbnail_url']),
         displayUrl: _asText(json['display_url']),
         originalFilename: _asText(json['original_filename']),
+        contentHash: _asText(json['content_hash']),
       );
 
   final int id;
   final String thumbnailUrl;
   final String displayUrl;
   final String originalFilename;
+  final String contentHash;
 }
 
 class Memory {

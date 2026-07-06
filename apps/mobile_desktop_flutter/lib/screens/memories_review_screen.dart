@@ -9,7 +9,8 @@ import '../widgets/error_state.dart';
 import '../widgets/loading_state.dart';
 import '../widgets/memory_card.dart';
 
-/// Memories waiting for a decision, for reviewers and owners.
+/// Memories waiting for a decision, plus the photos already in the album so
+/// their captions and stories can be edited anytime.
 class MemoriesReviewView extends StatefulWidget {
   const MemoriesReviewView({
     super.key,
@@ -25,18 +26,19 @@ class MemoriesReviewView extends StatefulWidget {
 }
 
 class _ReviewData {
-  const _ReviewData(this.pending, this.namesByUserId);
+  const _ReviewData(this.memories, this.namesByUserId);
 
-  final List<Memory> pending;
+  final List<Memory> memories;
   final Map<int, String> namesByUserId;
 }
 
 class _MemoriesReviewViewState extends State<MemoriesReviewView> {
+  String _status = 'pending';
   late Future<_ReviewData> _future = _load();
 
   Future<_ReviewData> _load() async {
     final results = await Future.wait([
-      widget.api.listMemories(widget.circle.id, status: 'pending'),
+      widget.api.listMemories(widget.circle.id, status: _status),
       widget.api.listMembers(widget.circle.id),
     ]);
     final members = results[1] as List<Member>;
@@ -55,6 +57,7 @@ class _MemoriesReviewViewState extends State<MemoriesReviewView> {
         circle: widget.circle,
         memory: memory,
         sentBy: sentBy,
+        editOnly: _status == 'approved',
       ),
     ));
     if (changed == true && mounted) _refresh();
@@ -63,65 +66,100 @@ class _MemoriesReviewViewState extends State<MemoriesReviewView> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return FutureBuilder<_ReviewData>(
-      future: _future,
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return ErrorState(message: '${snapshot.error}', onRetry: _refresh);
-        }
-        if (!snapshot.hasData) {
-          return const LoadingState(message: 'Gathering memories…');
-        }
-        final data = snapshot.data!;
-        if (data.pending.isEmpty) {
-          return EmptyState(
-            icon: Icons.inbox_outlined,
-            title: 'Nothing to review',
-            message:
-                'When someone sends a new memory, it will appear here for you to look at.',
-            actionLabel: 'Check again',
-            onAction: _refresh,
-          );
-        }
-        return Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
-            child: ListView(
-              padding: const EdgeInsets.all(Insets.md),
-              children: [
-                Text(
-                  'These memories are waiting for a decision. Tap one to take a closer look.',
-                  style: theme.textTheme.bodyMedium
-                      ?.copyWith(color: AppColors.softInk),
-                ),
-                const SizedBox(height: Insets.md),
-                for (final memory in data.pending) ...[
-                  MemoryCard(
-                    api: widget.api,
-                    memory: memory,
-                    sentBy: memory.submittedBy == null
-                        ? null
-                        : data.namesByUserId[memory.submittedBy],
-                    onTap: () => _openMemory(
-                      memory,
-                      memory.submittedBy == null
-                          ? ''
-                          : data.namesByUserId[memory.submittedBy] ?? '',
-                    ),
-                  ),
-                  const SizedBox(height: Insets.sm + Insets.xs),
-                ],
-              ],
-            ),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: Insets.md),
+          child: SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'pending', label: Text('Waiting')),
+              ButtonSegment(value: 'approved', label: Text('In the album')),
+            ],
+            selected: {_status},
+            onSelectionChanged: (selection) {
+              setState(() {
+                _status = selection.first;
+                _future = _load();
+              });
+            },
+            showSelectedIcon: false,
           ),
-        );
-      },
+        ),
+        Expanded(
+          child: FutureBuilder<_ReviewData>(
+            future: _future,
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return ErrorState(
+                    message: '${snapshot.error}', onRetry: _refresh);
+              }
+              if (!snapshot.hasData) {
+                return const LoadingState(message: 'Gathering memories…');
+              }
+              final data = snapshot.data!;
+              if (data.memories.isEmpty) {
+                return _status == 'pending'
+                    ? EmptyState(
+                        icon: Icons.inbox_outlined,
+                        title: 'Nothing to review',
+                        message:
+                            'When someone sends a new memory, it will appear here for you to look at.',
+                        actionLabel: 'Check again',
+                        onAction: _refresh,
+                      )
+                    : EmptyState(
+                        icon: Icons.auto_stories_outlined,
+                        title: 'The album is empty',
+                        message:
+                            'Once memories are added to the album, you can polish their captions and stories here.',
+                        actionLabel: 'Check again',
+                        onAction: _refresh,
+                      );
+              }
+              return Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 760),
+                  child: ListView(
+                    padding: const EdgeInsets.all(Insets.md),
+                    children: [
+                      Text(
+                        _status == 'pending'
+                            ? 'These memories are waiting for a decision. Tap one to take a closer look.'
+                            : 'These photos are in the album. Tap one to edit its caption or story.',
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(color: AppColors.softInk),
+                      ),
+                      const SizedBox(height: Insets.md),
+                      for (final memory in data.memories) ...[
+                        MemoryCard(
+                          api: widget.api,
+                          memory: memory,
+                          sentBy: memory.submittedBy == null
+                              ? null
+                              : data.namesByUserId[memory.submittedBy],
+                          onTap: () => _openMemory(
+                            memory,
+                            memory.submittedBy == null
+                                ? ''
+                                : data.namesByUserId[memory.submittedBy] ?? '',
+                          ),
+                        ),
+                        const SizedBox(height: Insets.sm + Insets.xs),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 }
 
-/// Full review of a single memory: read the story, tidy the words if needed,
-/// then decide what happens to it.
+/// Full view of a single memory: read the story, tidy the words, then either
+/// decide what happens to it (review) or simply save the edits (editOnly).
 class ReviewMemoryScreen extends StatefulWidget {
   const ReviewMemoryScreen({
     super.key,
@@ -129,12 +167,17 @@ class ReviewMemoryScreen extends StatefulWidget {
     required this.circle,
     required this.memory,
     required this.sentBy,
+    this.editOnly = false,
   });
 
   final ApiClient api;
   final Circle circle;
   final Memory memory;
   final String sentBy;
+
+  /// True when the memory is already in the album and only its words are
+  /// being polished.
+  final bool editOnly;
 
   @override
   State<ReviewMemoryScreen> createState() => _ReviewMemoryScreenState();
@@ -203,6 +246,33 @@ class _ReviewMemoryScreenState extends State<ReviewMemoryScreen> {
     }
   }
 
+  Future<void> _saveEdits() async {
+    final edits = _edits();
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    if (edits.isEmpty) {
+      navigator.pop(false);
+      return;
+    }
+    setState(() {
+      _busyAction = 'save';
+      _error = null;
+    });
+    try {
+      await widget.api.updateMemory(widget.circle.id, widget.memory.id, edits);
+      messenger.showSnackBar(
+          const SnackBar(content: Text('Your changes were saved.')));
+      navigator.pop(true);
+    } on ApiException catch (error) {
+      if (mounted) {
+        setState(() {
+          _error = error.message;
+          _busyAction = null;
+        });
+      }
+    }
+  }
+
   Future<void> _decide(String action) async {
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
@@ -264,7 +334,8 @@ class _ReviewMemoryScreenState extends State<ReviewMemoryScreen> {
   Widget build(BuildContext context) {
     final busy = _busyAction != null;
     return Scaffold(
-      appBar: AppBar(title: const Text('Review Memory')),
+      appBar: AppBar(
+          title: Text(widget.editOnly ? 'Edit Memory' : 'Review Memory')),
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(Insets.md),
@@ -284,42 +355,56 @@ class _ReviewMemoryScreenState extends State<ReviewMemoryScreen> {
                     textAlign: TextAlign.center,
                   ),
                 ),
-              Wrap(
-                spacing: Insets.sm + Insets.xs,
-                runSpacing: Insets.sm,
-                alignment: WrapAlignment.center,
-                children: [
-                  FilledButton.icon(
-                    onPressed: busy ? null : () => _decide('approve'),
-                    icon: _busyAction == 'approve'
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2, color: Colors.white),
-                          )
-                        : const Icon(Icons.check),
-                    label: const Text('Add to album'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: busy ? null : () => _decide('changes'),
-                    icon: _busyAction == 'changes'
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.edit_note),
-                    label: const Text('Ask for changes'),
-                  ),
-                  TextButton(
-                    onPressed: busy ? null : _confirmReject,
-                    style:
-                        TextButton.styleFrom(foregroundColor: AppColors.rust),
-                    child: const Text('Do not include'),
-                  ),
-                ],
-              ),
+              if (widget.editOnly)
+                FilledButton.icon(
+                  onPressed: busy ? null : _saveEdits,
+                  icon: _busyAction == 'save'
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Icon(Icons.check),
+                  label: const Text('Save changes'),
+                )
+              else
+                Wrap(
+                  spacing: Insets.sm + Insets.xs,
+                  runSpacing: Insets.sm,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: busy ? null : () => _decide('approve'),
+                      icon: _busyAction == 'approve'
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.check),
+                      label: const Text('Add to album'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: busy ? null : () => _decide('changes'),
+                      icon: _busyAction == 'changes'
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.edit_note),
+                      label: const Text('Ask for changes'),
+                    ),
+                    TextButton(
+                      onPressed: busy ? null : _confirmReject,
+                      style:
+                          TextButton.styleFrom(foregroundColor: AppColors.rust),
+                      child: const Text('Do not include'),
+                    ),
+                  ],
+                ),
             ],
           ),
         ),
@@ -392,7 +477,9 @@ class _ReviewMemoryScreenState extends State<ReviewMemoryScreen> {
         const SizedBox(height: Insets.md),
       ],
       Text(
-        'You can tidy the words before adding this to the album.',
+        widget.editOnly
+            ? 'Update the caption and story whenever you like — the album shows the latest words.'
+            : 'You can tidy the words before adding this to the album.',
         style: theme.textTheme.bodySmall?.copyWith(color: AppColors.softInk),
       ),
       const SizedBox(height: Insets.md),

@@ -9,9 +9,11 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  crypto: ^3.0.3
   file_picker: ^8.1.4
   http: ^1.2.2
   http_parser: ^4.0.2
+  share_plus: ^10.1.0
 
 dev_dependencies:
   flutter_test:

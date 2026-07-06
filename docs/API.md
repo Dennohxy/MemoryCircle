@@ -20,7 +20,8 @@ Circle and role endpoints:
 
 Assets and memories:
 
-- `POST /circles/{circle_id}/assets/upload`
+- `POST /circles/{circle_id}/assets/upload` (re-uploading identical bytes returns the existing asset)
+- `POST /circles/{circle_id}/assets/match` (body `{"hashes": [sha256...]}` → `{"matches": {hash: asset}}`)
 - `GET /circles/{circle_id}/assets/{asset_id}/thumbnail`
 - `GET /circles/{circle_id}/assets/{asset_id}/display`
 - `POST /circles/{circle_id}/memories`

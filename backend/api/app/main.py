@@ -134,6 +134,10 @@ class AlbumIn(BaseModel):
     template_key: str = "classic"
 
 
+class AssetMatchIn(BaseModel):
+    hashes: list[str]
+
+
 class PagePatch(BaseModel):
     layout_json: dict
     approval_status: str = "approved"
@@ -418,11 +422,21 @@ def upload_asset(
     require_member(db, circle_id, user, WRITE_ROLES)
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail="Only JPEG, PNG, and WebP images are supported")
+    raw = file.file.read()
+    content_hash = hashlib.sha256(raw).hexdigest()
+    existing = db.scalar(
+        select(PhotoAsset).where(
+            PhotoAsset.circle_id == circle_id,
+            PhotoAsset.content_hash == content_hash,
+        )
+    )
+    if existing:
+        # Same photo already lives in this circle; reuse it instead of
+        # storing a duplicate copy.
+        return serialize_asset(existing)
     source = PhotoSource(user_id=user.id, source_type=source_type, source_name=file.filename or "Local upload")
     db.add(source)
     db.flush()
-    raw = file.file.read()
-    content_hash = hashlib.sha256(raw).hexdigest()
     try:
         with Image.open(BytesIO(raw)) as image:
             width, height = image.size
@@ -482,6 +496,22 @@ def upload_asset(
     db.commit()
     db.refresh(asset)
     return serialize_asset(asset)
+
+
+@app.post("/circles/{circle_id}/assets/match")
+def match_assets(circle_id: int, payload: AssetMatchIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Returns circle assets whose content hash matches, so clients can link
+    photos that already exist instead of uploading duplicate copies."""
+    require_member(db, circle_id, user, WRITE_ROLES)
+    if not payload.hashes:
+        return {"matches": {}}
+    rows = db.scalars(
+        select(PhotoAsset).where(
+            PhotoAsset.circle_id == circle_id,
+            PhotoAsset.content_hash.in_(payload.hashes),
+        )
+    ).all()
+    return {"matches": {asset.content_hash: serialize_asset(asset) for asset in rows}}
 
 
 def send_asset_file(circle_id: int, asset_id: int, variant: str, db: Session, user: User):
