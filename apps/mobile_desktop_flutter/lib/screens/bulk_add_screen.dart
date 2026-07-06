@@ -20,11 +20,16 @@ class BulkAddView extends StatefulWidget {
     required this.api,
     required this.circle,
     required this.role,
+    this.targetAlbum,
   });
 
   final ApiClient api;
   final Circle circle;
   final CircleRole role;
+
+  /// When set, photos are added to this specific album instead of creating
+  /// or refreshing all albums.
+  final Album? targetAlbum;
 
   @override
   State<BulkAddView> createState() => _BulkAddViewState();
@@ -164,9 +169,14 @@ class _BulkAddViewState extends State<BulkAddView> {
     }
   }
 
-  /// Creates the named album, or refreshes existing albums when no new
-  /// title was given.
+  /// Rebuilds the target album when one was given; otherwise creates the
+  /// named album, or refreshes existing albums when no new title was given.
   Future<Album?> _buildAlbum(int circleId) async {
+    final target = widget.targetAlbum;
+    if (target != null) {
+      await widget.api.generateAlbumPages(circleId, target.id);
+      return widget.api.getAlbum(circleId, target.id);
+    }
     final title = _albumTitleController.text.trim();
     final albums = await widget.api.listAlbums(circleId);
     if (title.isNotEmpty || albums.isEmpty) {
@@ -209,15 +219,24 @@ class _BulkAddViewState extends State<BulkAddView> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Bring a whole album into the circle',
-                          style: theme.textTheme.titleLarge),
+                      Text(
+                        widget.targetAlbum == null
+                            ? 'Bring a whole album into the circle'
+                            : 'Add photos to "${widget.targetAlbum!.title}"',
+                        style: theme.textTheme.titleLarge,
+                      ),
                       const SizedBox(height: Insets.sm),
                       Text(
-                        'Choose all the photos from an album on your phone. '
-                        'Photos that are already in this circle are recognised '
-                        'automatically, so nothing is stored twice. Captions '
-                        'and stories can be added later, whenever anyone has '
-                        'time.',
+                        widget.targetAlbum == null
+                            ? 'Choose all the photos from an album on your phone. '
+                                'Photos that are already in this circle are recognised '
+                                'automatically, so nothing is stored twice. Captions '
+                                'and stories can be added later, whenever anyone has '
+                                'time.'
+                            : 'Choose photos to add to this album. Photos already '
+                                'in the circle are recognised automatically, so '
+                                'nothing is stored twice. Captions and stories can '
+                                'be added later.',
                         style: theme.textTheme.bodyMedium
                             ?.copyWith(color: AppColors.softInk),
                       ),
@@ -261,7 +280,7 @@ class _BulkAddViewState extends State<BulkAddView> {
                     ],
                   ),
                 ),
-                if (widget.role.canReview) ...[
+                if (widget.role.canReview && widget.targetAlbum == null) ...[
                   const SizedBox(height: Insets.md),
                   PaperCard(
                     child: TextField(

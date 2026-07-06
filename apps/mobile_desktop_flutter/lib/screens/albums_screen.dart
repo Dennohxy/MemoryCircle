@@ -7,6 +7,7 @@ import '../app/theme.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/error_state.dart';
 import '../widgets/loading_state.dart';
+import 'bulk_add_screen.dart';
 import 'flip_album_screen.dart';
 
 /// Albums shown as covers, with creation from approved memories.
@@ -78,6 +79,47 @@ class _AlbumsViewState extends State<AlbumsView> {
       messenger.showSnackBar(const SnackBar(
         content: Text('Album pages were updated from approved memories.'),
       ));
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
+  /// Opens the photo picker targeted at this album so anyone who can
+  /// contribute can add photos to it directly.
+  Future<void> _addPhotos(Album album) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => Scaffold(
+        appBar: AppBar(title: Text('Add to "${album.title}"')),
+        body: BulkAddView(
+          api: widget.api,
+          circle: widget.circle,
+          role: widget.role,
+          targetAlbum: album,
+        ),
+      ),
+    ));
+    if (mounted) _refresh();
+  }
+
+  Future<void> _renameAlbum(Album album) async {
+    final input = await showDialog<({String title, String description})>(
+      context: context,
+      builder: (_) => _EditAlbumDialog(album: album),
+    );
+    if (input == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await widget.api.updateAlbum(
+        widget.circle.id,
+        album.id,
+        title: input.title,
+        description: input.description,
+      );
+      if (!mounted) return;
+      _refresh();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Album details were updated.')),
+      );
     } on ApiException catch (error) {
       messenger.showSnackBar(SnackBar(content: Text(error.message)));
     }
@@ -188,7 +230,10 @@ class _AlbumsViewState extends State<AlbumsView> {
                             album: album,
                             canManage: widget.role.canReview,
                             canShare: widget.role.isOwner,
+                            canAddPhotos: widget.role.canContribute,
                             onOpen: () => _openAlbum(album),
+                            onAddPhotos: () => _addPhotos(album),
+                            onRename: () => _renameAlbum(album),
                             onRegenerate: () => _regeneratePages(album),
                             onShare: () => _shareAlbum(album),
                             onManageShares: () => _manageSharePackages(album),
@@ -211,7 +256,10 @@ class _AlbumCover extends StatelessWidget {
     required this.album,
     required this.canManage,
     required this.canShare,
+    required this.canAddPhotos,
     required this.onOpen,
+    required this.onAddPhotos,
+    required this.onRename,
     required this.onRegenerate,
     required this.onShare,
     required this.onManageShares,
@@ -220,7 +268,10 @@ class _AlbumCover extends StatelessWidget {
   final Album album;
   final bool canManage;
   final bool canShare;
+  final bool canAddPhotos;
   final VoidCallback onOpen;
+  final VoidCallback onAddPhotos;
+  final VoidCallback onRename;
   final VoidCallback onRegenerate;
   final VoidCallback onShare;
   final VoidCallback onManageShares;
@@ -287,6 +338,16 @@ class _AlbumCover extends StatelessWidget {
                           const SizedBox(width: Insets.xs),
                           const Icon(Icons.arrow_forward,
                               size: 16, color: AppColors.gold),
+                          const Spacer(),
+                          if (canAddPhotos)
+                            IconButton(
+                              tooltip: 'Add photos to this album',
+                              onPressed: onAddPhotos,
+                              icon: const Icon(
+                                  Icons.add_photo_alternate_outlined,
+                                  size: 20,
+                                  color: AppColors.gold),
+                            ),
                         ],
                       ),
                     ],
@@ -301,11 +362,28 @@ class _AlbumCover extends StatelessWidget {
                     tooltip: 'Album options',
                     iconColor: AppColors.onBackdropFaded,
                     onSelected: (value) {
-                      if (value == 'share') onShare();
-                      if (value == 'shares') onManageShares();
-                      if (value == 'regenerate') onRegenerate();
+                      switch (value) {
+                        case 'rename':
+                          onRename();
+                        case 'regenerate':
+                          onRegenerate();
+                        case 'share':
+                          onShare();
+                        case 'shares':
+                          onManageShares();
+                      }
                     },
                     itemBuilder: (_) => [
+                      if (canManage) ...const [
+                        PopupMenuItem(
+                          value: 'rename',
+                          child: Text('Edit name and note'),
+                        ),
+                        PopupMenuItem(
+                          value: 'regenerate',
+                          child: Text('Update pages from approved memories'),
+                        ),
+                      ],
                       if (canShare) ...const [
                         PopupMenuItem(
                           value: 'share',
@@ -316,11 +394,6 @@ class _AlbumCover extends StatelessWidget {
                           child: Text('Manage share packages'),
                         ),
                       ],
-                      if (canManage)
-                        const PopupMenuItem(
-                          value: 'regenerate',
-                          child: Text('Update pages from approved memories'),
-                        ),
                     ],
                   ),
                 ),
@@ -562,6 +635,78 @@ class _SharePackagesDialogState extends State<_SharePackagesDialog> {
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+}
+
+class _EditAlbumDialog extends StatefulWidget {
+  const _EditAlbumDialog({required this.album});
+
+  final Album album;
+
+  @override
+  State<_EditAlbumDialog> createState() => _EditAlbumDialogState();
+}
+
+class _EditAlbumDialogState extends State<_EditAlbumDialog> {
+  late final _titleController = TextEditingController(text: widget.album.title);
+  late final _descriptionController =
+      TextEditingController(text: widget.album.description);
+
+  @override
+  void initState() {
+    super.initState();
+    _titleController.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _descriptionController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canSave = _titleController.text.trim().isNotEmpty;
+    return AlertDialog(
+      title: const Text('Edit album'),
+      content: SizedBox(
+        width: 380,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _titleController,
+              autofocus: true,
+              textInputAction: TextInputAction.next,
+              decoration: appInput('Album title'),
+            ),
+            const SizedBox(height: Insets.md),
+            TextField(
+              controller: _descriptionController,
+              minLines: 2,
+              maxLines: 3,
+              decoration: appInput('A short note for the cover (optional)'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: canSave
+              ? () => Navigator.of(context).pop((
+                    title: _titleController.text.trim(),
+                    description: _descriptionController.text.trim(),
+                  ))
+              : null,
+          child: const Text('Save changes'),
         ),
       ],
     );

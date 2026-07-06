@@ -38,6 +38,7 @@ Albums:
 - `POST /circles/{circle_id}/albums`
 - `GET /circles/{circle_id}/albums`
 - `GET /circles/{circle_id}/albums/{album_id}`
+- `PATCH /circles/{circle_id}/albums/{album_id}` (title/description; owner or reviewer)
 - `POST /circles/{circle_id}/albums/{album_id}/pages/generate`
 - `PATCH /circles/{circle_id}/albums/{album_id}/pages/{page_id}`
 

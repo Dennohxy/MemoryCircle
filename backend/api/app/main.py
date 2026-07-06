@@ -154,6 +154,11 @@ class AssetMatchIn(BaseModel):
     hashes: list[str]
 
 
+class AlbumPatch(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+
+
 class PagePatch(BaseModel):
     layout_json: dict
     approval_status: str = "approved"
@@ -925,6 +930,20 @@ def get_public_share_asset(token: str, asset_id: int, variant: str, db: Session 
     if not str(path) or not path.exists():
         raise HTTPException(status_code=404, detail="Asset file missing")
     return FileResponse(path, media_type="image/jpeg")
+
+
+@app.patch("/circles/{circle_id}/albums/{album_id}")
+def patch_album(circle_id: int, album_id: int, payload: AlbumPatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, APPROVE_ROLES)
+    album = db.get(Album, album_id)
+    if not album or album.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Album not found")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(album, field, value)
+    log_activity(db, circle_id, user.id, "album.updated", "album", album_id, payload.model_dump(exclude_unset=True))
+    db.commit()
+    db.refresh(album)
+    return serialize_album(album)
 
 
 def page_layout(page_number: int, memories: list[MemoryItem], template: str):

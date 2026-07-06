@@ -297,3 +297,33 @@ def test_asset_responses_are_cacheable(client):
         headers={**auth(owner), "If-None-Match": etag},
     )
     assert cached.status_code == 304
+
+
+def test_album_edit_permissions(client):
+    circle_id, owner, approver, contributor, viewer = setup_circle(client)
+    _, memory = upload_memory(client, circle_id, owner, status="pending")
+    client.post(f"/circles/{circle_id}/memories/{memory['id']}/approve", headers=auth(owner))
+    album = client.post(
+        f"/circles/{circle_id}/albums",
+        json={"title": "First Title", "description": "First note"},
+        headers=auth(owner),
+    ).json()
+
+    updated = client.patch(
+        f"/circles/{circle_id}/albums/{album['id']}",
+        json={"title": "Renamed Album", "description": "A warmer note"},
+        headers=auth(approver),
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["title"] == "Renamed Album"
+    assert updated.json()["description"] == "A warmer note"
+
+    fetched = client.get(f"/circles/{circle_id}/albums/{album['id']}", headers=auth(viewer)).json()
+    assert fetched["title"] == "Renamed Album"
+
+    denied = client.patch(
+        f"/circles/{circle_id}/albums/{album['id']}",
+        json={"title": "Sneaky"},
+        headers=auth(contributor),
+    )
+    assert denied.status_code == 403

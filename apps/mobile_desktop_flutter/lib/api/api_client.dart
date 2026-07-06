@@ -439,6 +439,17 @@ class ApiClient {
   Future<void> generateAlbumPages(int circleId, int albumId) async =>
       _post('/circles/$circleId/albums/$albumId/pages/generate');
 
+  Future<Album> updateAlbum(
+    int circleId,
+    int albumId, {
+    String? title,
+    String? description,
+  }) async =>
+      Album.fromJson(await _patchJson('/circles/$circleId/albums/$albumId', {
+        if (title != null) 'title': title,
+        if (description != null) 'description': description,
+      }) as Map<String, dynamic>);
+
   Future<Album> getAlbum(int circleId, int albumId) async => Album.fromJson(
         await _get('/circles/$circleId/albums/$albumId')
             as Map<String, dynamic>,
