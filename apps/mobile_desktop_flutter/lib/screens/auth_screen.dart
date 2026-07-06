@@ -27,6 +27,20 @@ class _AuthScreenState extends State<AuthScreen> {
   String? _error;
 
   @override
+  void initState() {
+    super.initState();
+    _prefillLastEmail();
+  }
+
+  /// Prefills the email used last time on this device.
+  Future<void> _prefillLastEmail() async {
+    final email = await widget.api.lastEmail();
+    if (mounted && email != null && _emailController.text.isEmpty) {
+      _emailController.text = email;
+    }
+  }
+
+  @override
   void dispose() {
     _nameController.dispose();
     _emailController.dispose();

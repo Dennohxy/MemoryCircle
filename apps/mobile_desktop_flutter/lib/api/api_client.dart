@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
 
@@ -37,6 +38,14 @@ class ApiClient {
   String? _token;
   UserProfile? currentUser;
 
+  /// Called once when the saved sign-in stops being accepted by the server,
+  /// so the app can return to the sign-in screen gracefully.
+  void Function()? onSessionExpired;
+
+  static const _tokenPref = 'memory_circle_token';
+  static const _userPref = 'memory_circle_user';
+  static const _emailPref = 'memory_circle_last_email';
+
   final Map<String, Uint8List> _imageCache = {};
   final Map<String, Future<Uint8List>> _imageRequests = {};
 
@@ -68,6 +77,13 @@ class ApiClient {
       }
     }
     if (response.statusCode >= 400) {
+      if (response.statusCode == 401 && _token != null) {
+        // The saved sign-in is no longer valid; let the app bounce back to
+        // the sign-in screen instead of failing on every request.
+        _token = null;
+        currentUser = null;
+        onSessionExpired?.call();
+      }
       throw ApiException(
         _friendlyError(body, response.statusCode),
         statusCode: response.statusCode,
@@ -136,17 +152,47 @@ class ApiClient {
     return _startSession(data);
   }
 
-  UserProfile _startSession(Map<String, dynamic> data) {
+  Future<UserProfile> _startSession(Map<String, dynamic> data) async {
     _token = data['token'] as String?;
     _imageCache.clear();
-    currentUser = UserProfile.fromJson(data['user'] as Map<String, dynamic>);
+    final userMap = data['user'] as Map<String, dynamic>;
+    currentUser = UserProfile.fromJson(userMap);
+    final prefs = await SharedPreferences.getInstance();
+    if (_token != null) await prefs.setString(_tokenPref, _token!);
+    await prefs.setString(_userPref, jsonEncode(userMap));
+    await prefs.setString(_emailPref, currentUser!.email);
     return currentUser!;
   }
 
-  void signOut() {
+  /// Restores the saved sign-in from this device, if any, so people do not
+  /// have to log in every time they open the app. No network call is made;
+  /// an expired token is detected on first use via [onSessionExpired].
+  Future<UserProfile?> restoreSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString(_tokenPref);
+    final userJson = prefs.getString(_userPref);
+    if (token == null || userJson == null) return null;
+    try {
+      currentUser =
+          UserProfile.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
+    _token = token;
+    return currentUser;
+  }
+
+  /// The email used for the last sign-in on this device, for prefilling.
+  Future<String?> lastEmail() async =>
+      (await SharedPreferences.getInstance()).getString(_emailPref);
+
+  Future<void> signOut() async {
     _token = null;
     currentUser = null;
     _imageCache.clear();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_tokenPref);
+    await prefs.remove(_userPref);
   }
 
   // ---- Circles ----

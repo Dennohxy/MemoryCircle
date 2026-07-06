@@ -13,7 +13,8 @@ from .models import User
 
 SECRET_KEY = os.getenv("SECRET_KEY", "memory-circle-dev-secret-change-me")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_MINUTES = int(os.getenv("ACCESS_TOKEN_MINUTES", "1440"))
+# 30 days by default so family members stay signed in on their devices.
+ACCESS_TOKEN_MINUTES = int(os.getenv("ACCESS_TOKEN_MINUTES", "43200"))
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")

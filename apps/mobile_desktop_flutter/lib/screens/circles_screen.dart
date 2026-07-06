@@ -27,9 +27,23 @@ class CirclesScreen extends StatefulWidget {
 }
 
 class _CirclesScreenState extends State<CirclesScreen> {
-  late Future<List<Circle>> _circles = widget.api.listCircles();
+  bool _autoOpened = false;
+  late Future<List<Circle>> _circles = _load();
 
-  void _refresh() => setState(() => _circles = widget.api.listCircles());
+  Future<List<Circle>> _load() async {
+    final circles = await widget.api.listCircles();
+    // With exactly one circle there is nothing to choose, so open it right
+    // away. Backing out still shows the list.
+    if (!_autoOpened && circles.length == 1 && mounted) {
+      _autoOpened = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _openCircle(circles.first);
+      });
+    }
+    return circles;
+  }
+
+  void _refresh() => setState(() => _circles = _load());
 
   Future<void> _openCircle(Circle circle) async {
     await Navigator.of(context).push(MaterialPageRoute(
