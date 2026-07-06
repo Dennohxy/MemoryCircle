@@ -17,3 +17,6 @@ apps/mobile_desktop_flutter/.flutter-plugins-dependencies
 .idea/
 *.iml
 .vscode/
+
+# Local-only credentials and notes (never pushed)
+local/
