@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 from io import BytesIO
 
 from PIL import Image
@@ -133,6 +134,93 @@ def test_album_page_generation_and_flip_payload(client):
     assert len(fetched.json()["pages"]) >= 3
 
 
+def create_album_with_pages(client, circle_id, owner, approver, contributor):
+    _asset, memory = upload_memory(client, circle_id, contributor, status="pending")
+    client.post(f"/circles/{circle_id}/memories/{memory['id']}/approve", headers=auth(approver))
+    album = client.post(
+        f"/circles/{circle_id}/albums",
+        json={"title": "Family Highlights"},
+        headers=auth(approver),
+    ).json()
+    client.post(f"/circles/{circle_id}/albums/{album['id']}/pages/generate", headers=auth(approver))
+    return client.get(f"/circles/{circle_id}/albums/{album['id']}", headers=auth(owner)).json()
+
+
+def test_owner_can_create_and_revoke_public_share_package(client):
+    circle_id, owner, approver, contributor, viewer = setup_circle(client)
+    album = create_album_with_pages(client, circle_id, owner, approver, contributor)
+
+    denied = client.post(
+        f"/circles/{circle_id}/albums/{album['id']}/share-packages",
+        json={"access_type": "saved"},
+        headers=auth(viewer),
+    )
+    assert denied.status_code == 403
+
+    package = client.post(
+        f"/circles/{circle_id}/albums/{album['id']}/share-packages",
+        json={"access_type": "saved", "note": "For Auntie", "allow_downloads": False},
+        headers=auth(owner),
+    )
+    assert package.status_code == 200, package.text
+    payload = package.json()
+    assert payload["status"] == "active"
+    assert payload["share_url"].endswith(f"/share/{payload['share_url'].split('/')[-1]}")
+
+    public = client.get(payload["share_url"])
+    assert public.status_code == 200, public.text
+    public_payload = public.json()
+    assert public_payload["title"] == "Family Highlights"
+    assert public_payload["note"] == "For Auntie"
+    assert public_payload["pages"][1]["layout_json"]["memories"][0]["display_url"].startswith("http://testserver/share/")
+
+    packages = client.get(
+        f"/circles/{circle_id}/albums/{album['id']}/share-packages",
+        headers=auth(owner),
+    )
+    assert len(packages.json()) == 1
+
+    revoked = client.post(
+        f"/circles/{circle_id}/albums/{album['id']}/share-packages/{payload['id']}/revoke",
+        headers=auth(owner),
+    )
+    assert revoked.json()["status"] == "revoked"
+    unavailable = client.get(payload["share_url"])
+    assert unavailable.status_code == 404
+
+
+def test_expiring_share_package_stops_after_first_view(client):
+    circle_id, owner, approver, contributor, _viewer = setup_circle(client)
+    album = create_album_with_pages(client, circle_id, owner, approver, contributor)
+
+    package = client.post(
+        f"/circles/{circle_id}/albums/{album['id']}/share-packages",
+        json={"access_type": "expires_after_view"},
+        headers=auth(owner),
+    )
+    assert package.status_code == 200, package.text
+    share_url = package.json()["share_url"]
+    assert client.get(share_url).status_code == 200
+    assert client.get(share_url).status_code == 410
+
+
+def test_dated_share_package_expires(client):
+    circle_id, owner, approver, contributor, _viewer = setup_circle(client)
+    album = create_album_with_pages(client, circle_id, owner, approver, contributor)
+
+    package = client.post(
+        f"/circles/{circle_id}/albums/{album['id']}/share-packages",
+        json={
+            "access_type": "expires_at",
+            "expires_at": (datetime.utcnow() - timedelta(minutes=1)).isoformat(),
+        },
+        headers=auth(owner),
+    )
+    assert package.status_code == 200, package.text
+    assert package.json()["status"] == "expired"
+    assert client.get(package.json()["share_url"]).status_code == 410
+
+
 def test_upload_rejects_non_images(client):
     circle_id, _owner, _approver, contributor, _viewer = setup_circle(client)
     response = client.post(
@@ -187,3 +275,25 @@ def test_upload_dedupe_and_hash_match(client):
         headers=auth(viewer),
     )
     assert denied.status_code == 403
+
+
+def test_asset_responses_are_cacheable(client):
+    owner = register(client, "cache@test.com", "Cache")
+    circle = client.post("/circles", json={"name": "Cache Circle"}, headers=auth(owner)).json()
+    asset = client.post(
+        f"/circles/{circle['id']}/assets/upload",
+        files={"file": ("p.jpg", image_file(), "image/jpeg")},
+        headers=auth(owner),
+    ).json()
+
+    first = client.get(asset["thumbnail_url"], headers=auth(owner))
+    assert first.status_code == 200, first.text
+    assert "immutable" in first.headers.get("cache-control", "")
+    etag = first.headers.get("etag")
+    assert etag
+
+    cached = client.get(
+        asset["thumbnail_url"],
+        headers={**auth(owner), "If-None-Match": etag},
+    )
+    assert cached.status_code == 304

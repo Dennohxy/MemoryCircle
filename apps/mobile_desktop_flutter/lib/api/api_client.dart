@@ -46,6 +46,9 @@ class ApiClient {
   static const _userPref = 'memory_circle_user';
   static const _emailPref = 'memory_circle_last_email';
 
+  // Small in-memory image cache, bounded so long sessions do not grow
+  // unbounded. Insertion order is used as a simple least-recently-used list.
+  static const _maxCachedImages = 150;
   final Map<String, Uint8List> _imageCache = {};
   final Map<String, Future<Uint8List>> _imageRequests = {};
 
@@ -324,8 +327,11 @@ class ApiClient {
   /// and display images can be shown via `Image.memory`. Bytes are cached in
   /// memory for the session.
   Future<Uint8List> imageBytes(String path) {
-    final cached = _imageCache[path];
-    if (cached != null) return Future.value(cached);
+    final cached = _imageCache.remove(path);
+    if (cached != null) {
+      _imageCache[path] = cached; // Mark as most recently used.
+      return Future.value(cached);
+    }
     return _imageRequests.putIfAbsent(path, () => _fetchImage(path));
   }
 
@@ -341,6 +347,9 @@ class ApiClient {
       }
       final bytes = response.bodyBytes;
       _imageCache[path] = bytes;
+      while (_imageCache.length > _maxCachedImages) {
+        _imageCache.remove(_imageCache.keys.first); // Evict least recent.
+      }
       return bytes;
     } finally {
       _imageRequests.remove(path);
@@ -434,6 +443,48 @@ class ApiClient {
         await _get('/circles/$circleId/albums/$albumId')
             as Map<String, dynamic>,
       );
+
+  Future<SharePackage> createSharePackage(
+    int circleId,
+    int albumId, {
+    String? title,
+    String note = '',
+    String accessType = 'expires_at',
+    DateTime? expiresAt,
+    bool allowDownloads = false,
+    bool includeCaptions = true,
+  }) async =>
+      SharePackage.fromJson(await _post(
+        '/circles/$circleId/albums/$albumId/share-packages',
+        {
+          if (title != null) 'title': title,
+          'note': note,
+          'access_type': accessType,
+          if (expiresAt != null) 'expires_at': expiresAt.toIso8601String(),
+          'allow_downloads': allowDownloads,
+          'include_captions': includeCaptions,
+        },
+      ) as Map<String, dynamic>);
+
+  Future<List<SharePackage>> listSharePackages(
+    int circleId,
+    int albumId,
+  ) async =>
+      [
+        for (final item in await _get(
+          '/circles/$circleId/albums/$albumId/share-packages',
+        ) as List<dynamic>)
+          SharePackage.fromJson(item as Map<String, dynamic>),
+      ];
+
+  Future<SharePackage> revokeSharePackage(
+    int circleId,
+    int albumId,
+    int packageId,
+  ) async =>
+      SharePackage.fromJson(await _post(
+        '/circles/$circleId/albums/$albumId/share-packages/$packageId/revoke',
+      ) as Map<String, dynamic>);
 
   // ---- Health ----
 

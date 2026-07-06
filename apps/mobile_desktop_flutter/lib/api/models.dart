@@ -252,6 +252,59 @@ class AlbumPage {
   final Map<String, dynamic> layout;
 }
 
+class SharePackage {
+  const SharePackage({
+    required this.id,
+    required this.title,
+    required this.note,
+    required this.accessType,
+    required this.allowDownloads,
+    required this.includeCaptions,
+    required this.status,
+    required this.shareUrl,
+    this.expiresAt,
+    this.createdAt,
+    this.revokedAt,
+    this.viewedAt,
+  });
+
+  factory SharePackage.fromJson(Map<String, dynamic> json) => SharePackage(
+        id: _asInt(json['id']),
+        title: _asText(json['title']),
+        note: _asText(json['note']),
+        accessType: _asText(json['access_type']),
+        allowDownloads: json['allow_downloads'] == true,
+        includeCaptions: json['include_captions'] != false,
+        status: _asText(json['status']),
+        shareUrl: _asText(json['share_url']),
+        expiresAt: _asDate(json['expires_at']),
+        createdAt: _asDate(json['created_at']),
+        revokedAt: _asDate(json['revoked_at']),
+        viewedAt: _asDate(json['viewed_at']),
+      );
+
+  final int id;
+  final String title;
+  final String note;
+  final String accessType;
+  final bool allowDownloads;
+  final bool includeCaptions;
+  final String status;
+  final String shareUrl;
+  final DateTime? expiresAt;
+  final DateTime? createdAt;
+  final DateTime? revokedAt;
+  final DateTime? viewedAt;
+
+  String get statusLabel => switch (status) {
+        'active' => 'Active',
+        'expired' => 'Expired',
+        'revoked' => 'Revoked',
+        'viewed' => 'Viewed',
+        _ => status,
+      };
+}
+
 class CircleHealth {
   const CircleHealth({
     required this.assetCount,

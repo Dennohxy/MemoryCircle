@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../api/api_client.dart';
 import '../api/models.dart';
@@ -82,6 +83,55 @@ class _AlbumsViewState extends State<AlbumsView> {
     }
   }
 
+  Future<void> _shareAlbum(Album album) async {
+    final input = await showDialog<
+        ({
+          String note,
+          String accessType,
+          DateTime? expiresAt,
+          bool allowDownloads,
+          bool includeCaptions,
+        })>(
+      context: context,
+      builder: (_) => _CreateSharePackageDialog(album: album),
+    );
+    if (input == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final package = await widget.api.createSharePackage(
+        widget.circle.id,
+        album.id,
+        title: album.title,
+        note: input.note,
+        accessType: input.accessType,
+        expiresAt: input.expiresAt,
+        allowDownloads: input.allowDownloads,
+        includeCaptions: input.includeCaptions,
+      );
+      if (!mounted) return;
+      await Share.share(
+        package.shareUrl,
+        subject: 'MemoryCircle album: ${package.title}',
+      );
+      messenger.showSnackBar(const SnackBar(
+        content: Text('Share package created. You can revoke it anytime.'),
+      ));
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
+  Future<void> _manageSharePackages(Album album) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _SharePackagesDialog(
+        api: widget.api,
+        circleId: widget.circle.id,
+        album: album,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<List<Album>>(
@@ -137,8 +187,11 @@ class _AlbumsViewState extends State<AlbumsView> {
                           _AlbumCover(
                             album: album,
                             canManage: widget.role.canReview,
+                            canShare: widget.role.isOwner,
                             onOpen: () => _openAlbum(album),
                             onRegenerate: () => _regeneratePages(album),
+                            onShare: () => _shareAlbum(album),
+                            onManageShares: () => _manageSharePackages(album),
                           ),
                       ],
                     ),
@@ -157,14 +210,20 @@ class _AlbumCover extends StatelessWidget {
   const _AlbumCover({
     required this.album,
     required this.canManage,
+    required this.canShare,
     required this.onOpen,
     required this.onRegenerate,
+    required this.onShare,
+    required this.onManageShares,
   });
 
   final Album album;
   final bool canManage;
+  final bool canShare;
   final VoidCallback onOpen;
   final VoidCallback onRegenerate;
+  final VoidCallback onShare;
+  final VoidCallback onManageShares;
 
   @override
   Widget build(BuildContext context) {
@@ -234,7 +293,7 @@ class _AlbumCover extends StatelessWidget {
                   ),
                 ),
               ),
-              if (canManage)
+              if (canManage || canShare)
                 Positioned(
                   top: 4,
                   right: 4,
@@ -242,13 +301,26 @@ class _AlbumCover extends StatelessWidget {
                     tooltip: 'Album options',
                     iconColor: AppColors.onBackdropFaded,
                     onSelected: (value) {
+                      if (value == 'share') onShare();
+                      if (value == 'shares') onManageShares();
                       if (value == 'regenerate') onRegenerate();
                     },
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(
-                        value: 'regenerate',
-                        child: Text('Update pages from approved memories'),
-                      ),
+                    itemBuilder: (_) => [
+                      if (canShare) ...const [
+                        PopupMenuItem(
+                          value: 'share',
+                          child: Text('Create share package'),
+                        ),
+                        PopupMenuItem(
+                          value: 'shares',
+                          child: Text('Manage share packages'),
+                        ),
+                      ],
+                      if (canManage)
+                        const PopupMenuItem(
+                          value: 'regenerate',
+                          child: Text('Update pages from approved memories'),
+                        ),
                     ],
                   ),
                 ),
@@ -256,6 +328,242 @@ class _AlbumCover extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _CreateSharePackageDialog extends StatefulWidget {
+  const _CreateSharePackageDialog({required this.album});
+
+  final Album album;
+
+  @override
+  State<_CreateSharePackageDialog> createState() =>
+      _CreateSharePackageDialogState();
+}
+
+class _CreateSharePackageDialogState extends State<_CreateSharePackageDialog> {
+  final _noteController = TextEditingController();
+  String _accessType = 'expires_at';
+  bool _allowDownloads = false;
+  bool _includeCaptions = true;
+
+  @override
+  void dispose() {
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  DateTime? get _expiresAt => _accessType == 'expires_at'
+      ? DateTime.now().add(const Duration(days: 30))
+      : null;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('Create share package'),
+      content: SizedBox(
+        width: 440,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Only "${widget.album.title}" will be shared. People with the link can view it without signing in.',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: AppColors.softInk),
+              ),
+              const SizedBox(height: Insets.md),
+              SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(
+                    value: 'expires_at',
+                    label: Text('30 days'),
+                    icon: Icon(Icons.schedule_outlined),
+                  ),
+                  ButtonSegment(
+                    value: 'expires_after_view',
+                    label: Text('One view'),
+                    icon: Icon(Icons.visibility_outlined),
+                  ),
+                  ButtonSegment(
+                    value: 'saved',
+                    label: Text('Saved'),
+                    icon: Icon(Icons.bookmark_border),
+                  ),
+                ],
+                selected: {_accessType},
+                onSelectionChanged: (value) =>
+                    setState(() => _accessType = value.first),
+              ),
+              const SizedBox(height: Insets.md),
+              TextField(
+                controller: _noteController,
+                minLines: 2,
+                maxLines: 3,
+                decoration: appInput(
+                  'Optional note',
+                  hint: 'For example, "Photos from the reunion."',
+                ),
+              ),
+              const SizedBox(height: Insets.sm),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _includeCaptions,
+                title: const Text('Include captions and stories'),
+                onChanged: (value) => setState(() => _includeCaptions = value),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _allowDownloads,
+                title: const Text('Allow downloads'),
+                subtitle: const Text('Off is safer for most family shares.'),
+                onChanged: (value) => setState(() => _allowDownloads = value),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop((
+            note: _noteController.text.trim(),
+            accessType: _accessType,
+            expiresAt: _expiresAt,
+            allowDownloads: _allowDownloads,
+            includeCaptions: _includeCaptions,
+          )),
+          child: const Text('Create link'),
+        ),
+      ],
+    );
+  }
+}
+
+class _SharePackagesDialog extends StatefulWidget {
+  const _SharePackagesDialog({
+    required this.api,
+    required this.circleId,
+    required this.album,
+  });
+
+  final ApiClient api;
+  final int circleId;
+  final Album album;
+
+  @override
+  State<_SharePackagesDialog> createState() => _SharePackagesDialogState();
+}
+
+class _SharePackagesDialogState extends State<_SharePackagesDialog> {
+  late Future<List<SharePackage>> _future = widget.api.listSharePackages(
+    widget.circleId,
+    widget.album.id,
+  );
+
+  void _refresh() {
+    setState(() {
+      _future = widget.api.listSharePackages(widget.circleId, widget.album.id);
+    });
+  }
+
+  Future<void> _revoke(SharePackage package) async {
+    try {
+      await widget.api.revokeSharePackage(
+        widget.circleId,
+        widget.album.id,
+        package.id,
+      );
+      _refresh();
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Share packages'),
+      content: SizedBox(
+        width: 520,
+        child: FutureBuilder<List<SharePackage>>(
+          future: _future,
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return ErrorState(
+                  message: '${snapshot.error}', onRetry: _refresh);
+            }
+            if (!snapshot.hasData) {
+              return const LoadingState(message: 'Finding share packages…');
+            }
+            final packages = snapshot.data!;
+            if (packages.isEmpty) {
+              return const EmptyState(
+                icon: Icons.ios_share_outlined,
+                title: 'No share packages yet',
+                message:
+                    'Create a package when you are ready to share this album outside the circle.',
+              );
+            }
+            return ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 420),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: packages.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final package = packages[index];
+                  final expires = package.expiresAt == null
+                      ? ''
+                      : ' · Expires ${formatFriendlyDate(package.expiresAt)}';
+                  return ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(package.title),
+                    subtitle: Text('${package.statusLabel}$expires'),
+                    trailing: Wrap(
+                      spacing: Insets.xs,
+                      children: [
+                        IconButton(
+                          tooltip: 'Share link',
+                          icon: const Icon(Icons.ios_share_outlined),
+                          onPressed: package.status == 'active'
+                              ? () => Share.share(
+                                    package.shareUrl,
+                                    subject:
+                                        'MemoryCircle album: ${package.title}',
+                                  )
+                              : null,
+                        ),
+                        IconButton(
+                          tooltip: 'Revoke access',
+                          icon: const Icon(Icons.link_off_outlined),
+                          onPressed: package.status == 'active'
+                              ? () => _revoke(package)
+                              : null,
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
     );
   }
 }

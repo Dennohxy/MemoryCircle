@@ -3,14 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel, EmailStr
@@ -28,6 +30,7 @@ from .models import (
     MemoryItem,
     PhotoAsset,
     PhotoSource,
+    SharePackage,
     User,
 )
 
@@ -41,6 +44,7 @@ ALLOWED_IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": 
 ROLE_ORDER = {"viewer": 0, "contributor": 1, "approver": 2, "owner": 3}
 WRITE_ROLES = {"owner", "approver", "contributor"}
 APPROVE_ROLES = {"owner", "approver"}
+FIRST_VIEW_ASSET_GRACE = timedelta(minutes=30)
 
 app = FastAPI(title="Memory Circle API", version="0.1.0")
 
@@ -52,6 +56,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Compress JSON responses so lists of memories/albums travel smaller.
+app.add_middleware(GZipMiddleware, minimum_size=600)
 
 
 def ensure_asset_blob_columns():
@@ -132,6 +138,16 @@ class AlbumIn(BaseModel):
     title: str
     description: str = ""
     template_key: str = "classic"
+
+
+class SharePackageIn(BaseModel):
+    title: Optional[str] = None
+    note: str = ""
+    access_type: str = "expires_at"
+    expires_at: Optional[datetime] = None
+    allow_downloads: bool = False
+    include_captions: bool = True
+    page_ids: list[int] = []
 
 
 class AssetMatchIn(BaseModel):
@@ -272,6 +288,96 @@ def serialize_page(page: AlbumPage):
         "layout_json": json.loads(page.layout_json),
         "version": page.version,
         "approval_status": page.approval_status,
+    }
+
+
+def share_url(request: Request, package: SharePackage):
+    return str(request.url_for("get_public_share_package", token=package.token))
+
+
+def share_status(package: SharePackage):
+    if package.revoked_at:
+        return "revoked"
+    if package.expires_at and package.expires_at <= datetime.utcnow():
+        return "expired"
+    if package.access_type == "expires_after_view" and package.viewed_at:
+        return "viewed"
+    return "active"
+
+
+def serialize_share_package(package: SharePackage, request: Request):
+    return {
+        "id": package.id,
+        "circle_id": package.circle_id,
+        "album_id": package.album_id,
+        "title": package.title,
+        "note": package.note,
+        "access_type": package.access_type,
+        "expires_at": package.expires_at,
+        "allow_downloads": package.allow_downloads,
+        "include_captions": package.include_captions,
+        "page_ids": json.loads(package.page_ids_json or "[]"),
+        "status": share_status(package),
+        "share_url": share_url(request, package),
+        "created_at": package.created_at,
+        "revoked_at": package.revoked_at,
+        "viewed_at": package.viewed_at,
+    }
+
+
+def require_active_share_package(db: Session, token: str):
+    package = db.scalar(select(SharePackage).where(SharePackage.token == token))
+    if not package or package.revoked_at:
+        raise HTTPException(status_code=404, detail="This share package is no longer available")
+    if package.expires_at and package.expires_at <= datetime.utcnow():
+        raise HTTPException(status_code=410, detail="This share package has expired")
+    if package.access_type == "expires_after_view" and package.viewed_at:
+        raise HTTPException(status_code=410, detail="This share package has already been viewed")
+    return package
+
+
+def share_pages(db: Session, package: SharePackage):
+    query = select(AlbumPage).where(AlbumPage.album_id == package.album_id)
+    page_ids = json.loads(package.page_ids_json or "[]")
+    if page_ids:
+        query = query.where(AlbumPage.id.in_(page_ids))
+    return db.scalars(query.order_by(AlbumPage.page_number)).all()
+
+
+def page_asset_ids(pages: list[AlbumPage]):
+    asset_ids: set[int] = set()
+    for page in pages:
+        layout = json.loads(page.layout_json)
+        for memory in layout.get("memories", []):
+            asset_id = memory.get("asset_id")
+            if isinstance(asset_id, int):
+                asset_ids.add(asset_id)
+    return asset_ids
+
+
+def serialize_public_share(package: SharePackage, album: Album, pages: list[AlbumPage], request: Request):
+    token = package.token
+    serialized_pages = []
+    for page in pages:
+        data = serialize_page(page)
+        layout = data["layout_json"]
+        for memory in layout.get("memories", []):
+            asset_id = memory.get("asset_id")
+            if isinstance(asset_id, int):
+                memory["display_url"] = str(request.url_for("get_public_share_asset", token=token, asset_id=asset_id, variant="display"))
+                memory["thumbnail_url"] = str(request.url_for("get_public_share_asset", token=token, asset_id=asset_id, variant="thumbnail"))
+            if not package.include_captions:
+                memory["caption"] = ""
+                memory["story_preview"] = ""
+        serialized_pages.append(data)
+    return {
+        "title": package.title,
+        "note": package.note,
+        "album": serialize_album(album),
+        "allow_downloads": package.allow_downloads,
+        "include_captions": package.include_captions,
+        "expires_at": package.expires_at,
+        "pages": serialized_pages,
     }
 
 
@@ -514,28 +620,38 @@ def match_assets(circle_id: int, payload: AssetMatchIn, db: Session = Depends(ge
     return {"matches": {asset.content_hash: serialize_asset(asset) for asset in rows}}
 
 
-def send_asset_file(circle_id: int, asset_id: int, variant: str, db: Session, user: User):
+def send_asset_file(circle_id: int, asset_id: int, variant: str, db: Session, user: User, request: Request):
     require_member(db, circle_id, user)
     asset = db.get(PhotoAsset, asset_id)
     if not asset or asset.circle_id != circle_id:
         raise HTTPException(status_code=404, detail="Asset not found")
+    # Each processed image is derived from immutable content, so it can be
+    # cached hard by the browser and revalidated cheaply with an ETag.
+    etag = f'"{asset.content_hash}-{variant}"'
+    cache_headers = {
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "ETag": etag,
+    }
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match and etag in {tag.strip() for tag in if_none_match.split(",")}:
+        return Response(status_code=304, headers=cache_headers)
     blob = asset.thumbnail_blob if variant == "thumbnail" else asset.display_blob
     if blob is not None:
-        return Response(content=blob, media_type="image/jpeg")
+        return Response(content=blob, media_type="image/jpeg", headers=cache_headers)
     path = Path(asset.thumbnail_path if variant == "thumbnail" else asset.display_path)
     if not str(path) or not path.exists():
         raise HTTPException(status_code=404, detail="Asset file missing")
-    return FileResponse(path, media_type="image/jpeg")
+    return FileResponse(path, media_type="image/jpeg", headers=cache_headers)
 
 
 @app.get("/circles/{circle_id}/assets/{asset_id}/thumbnail")
-def get_thumbnail(circle_id: int, asset_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    return send_asset_file(circle_id, asset_id, "thumbnail", db, user)
+def get_thumbnail(circle_id: int, asset_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    return send_asset_file(circle_id, asset_id, "thumbnail", db, user, request)
 
 
 @app.get("/circles/{circle_id}/assets/{asset_id}/display")
-def get_display(circle_id: int, asset_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    return send_asset_file(circle_id, asset_id, "display", db, user)
+def get_display(circle_id: int, asset_id: int, request: Request, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    return send_asset_file(circle_id, asset_id, "display", db, user, request)
 
 
 @app.post("/circles/{circle_id}/memories")
@@ -682,6 +798,133 @@ def get_album(circle_id: int, album_id: int, db: Session = Depends(get_db), user
         raise HTTPException(status_code=404, detail="Album not found")
     pages = db.scalars(select(AlbumPage).where(AlbumPage.album_id == album_id).order_by(AlbumPage.page_number)).all()
     return serialize_album(album, pages)
+
+
+@app.post("/circles/{circle_id}/albums/{album_id}/share-packages")
+def create_share_package(
+    circle_id: int,
+    album_id: int,
+    payload: SharePackageIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    require_member(db, circle_id, user, {"owner"})
+    album = db.get(Album, album_id)
+    if not album or album.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Album not found")
+    if payload.access_type not in {"saved", "expires_at", "expires_after_view"}:
+        raise HTTPException(status_code=400, detail="Choose a supported share package access type")
+    if payload.access_type == "expires_at" and not payload.expires_at:
+        raise HTTPException(status_code=400, detail="Choose when this share package should expire")
+    pages = db.scalars(select(AlbumPage).where(AlbumPage.album_id == album_id)).all()
+    available_page_ids = {page.id for page in pages}
+    selected_page_ids = payload.page_ids or []
+    if any(page_id not in available_page_ids for page_id in selected_page_ids):
+        raise HTTPException(status_code=400, detail="One of those pages is not in this album")
+    package = SharePackage(
+        circle_id=circle_id,
+        album_id=album_id,
+        token=secrets.token_urlsafe(24),
+        title=(payload.title or album.title).strip() or album.title,
+        note=payload.note.strip(),
+        access_type=payload.access_type,
+        expires_at=payload.expires_at if payload.access_type == "expires_at" else None,
+        allow_downloads=payload.allow_downloads,
+        include_captions=payload.include_captions,
+        page_ids_json=json.dumps(selected_page_ids),
+        created_by=user.id,
+    )
+    db.add(package)
+    db.flush()
+    log_activity(db, circle_id, user.id, "share_package.created", "share_package", package.id, {"album_id": album_id})
+    db.commit()
+    db.refresh(package)
+    return serialize_share_package(package, request)
+
+
+@app.get("/circles/{circle_id}/albums/{album_id}/share-packages")
+def list_share_packages(
+    circle_id: int,
+    album_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    require_member(db, circle_id, user, {"owner"})
+    album = db.get(Album, album_id)
+    if not album or album.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Album not found")
+    packages = db.scalars(
+        select(SharePackage)
+        .where(SharePackage.circle_id == circle_id, SharePackage.album_id == album_id)
+        .order_by(SharePackage.created_at.desc())
+    ).all()
+    return [serialize_share_package(package, request) for package in packages]
+
+
+@app.post("/circles/{circle_id}/albums/{album_id}/share-packages/{package_id}/revoke")
+def revoke_share_package(
+    circle_id: int,
+    album_id: int,
+    package_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    require_member(db, circle_id, user, {"owner"})
+    package = db.get(SharePackage, package_id)
+    if not package or package.circle_id != circle_id or package.album_id != album_id:
+        raise HTTPException(status_code=404, detail="Share package not found")
+    if not package.revoked_at:
+        package.revoked_at = datetime.utcnow()
+        log_activity(db, circle_id, user.id, "share_package.revoked", "share_package", package.id, {"album_id": album_id})
+    db.commit()
+    return serialize_share_package(package, request)
+
+
+@app.get("/share/{token}", name="get_public_share_package")
+def get_public_share_package(token: str, request: Request, db: Session = Depends(get_db)):
+    package = require_active_share_package(db, token)
+    album = db.get(Album, package.album_id)
+    if not album:
+        raise HTTPException(status_code=404, detail="This share package is no longer available")
+    pages = share_pages(db, package)
+    payload = serialize_public_share(package, album, pages, request)
+    if package.access_type == "expires_after_view":
+        package.viewed_at = datetime.utcnow()
+        db.commit()
+    return payload
+
+
+@app.get("/share/{token}/assets/{asset_id}/{variant}", name="get_public_share_asset")
+def get_public_share_asset(token: str, asset_id: int, variant: str, db: Session = Depends(get_db)):
+    if variant not in {"thumbnail", "display"}:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    package = db.scalar(select(SharePackage).where(SharePackage.token == token))
+    if not package or package.revoked_at:
+        raise HTTPException(status_code=404, detail="This share package is no longer available")
+    if package.expires_at and package.expires_at <= datetime.utcnow():
+        raise HTTPException(status_code=410, detail="This share package has expired")
+    if (
+        package.access_type == "expires_after_view"
+        and package.viewed_at
+        and package.viewed_at + FIRST_VIEW_ASSET_GRACE <= datetime.utcnow()
+    ):
+        raise HTTPException(status_code=410, detail="This share package has expired")
+    pages = share_pages(db, package)
+    if asset_id not in page_asset_ids(pages):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    asset = db.get(PhotoAsset, asset_id)
+    if not asset or asset.circle_id != package.circle_id:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    blob = asset.thumbnail_blob if variant == "thumbnail" else asset.display_blob
+    if blob is not None:
+        return Response(content=blob, media_type="image/jpeg")
+    path = Path(asset.thumbnail_path if variant == "thumbnail" else asset.display_path)
+    if not str(path) or not path.exists():
+        raise HTTPException(status_code=404, detail="Asset file missing")
+    return FileResponse(path, media_type="image/jpeg")
 
 
 def page_layout(page_number: int, memories: list[MemoryItem], template: str):

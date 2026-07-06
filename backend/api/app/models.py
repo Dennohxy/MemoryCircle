@@ -143,6 +143,27 @@ class AlbumPage(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
 
 
+class SharePackage(Base):
+    __tablename__ = "share_packages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    circle_id: Mapped[int] = mapped_column(ForeignKey("memory_circles.id"), index=True)
+    album_id: Mapped[int] = mapped_column(ForeignKey("albums.id"), index=True)
+    token: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(220))
+    note: Mapped[str] = mapped_column(Text, default="")
+    access_type: Mapped[str] = mapped_column(String(60), default="expires_at")
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    allow_downloads: Mapped[bool] = mapped_column(Boolean, default=False)
+    include_captions: Mapped[bool] = mapped_column(Boolean, default=True)
+    page_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    viewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
 class ActivityLog(Base):
     __tablename__ = "activity_logs"
 

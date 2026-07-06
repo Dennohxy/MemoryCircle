@@ -1,0 +1,26 @@
+name: Keep backend warm
+
+# The free Render instance sleeps after ~15 minutes idle, so the first
+# request of the day is slow. This pings the health endpoint periodically to
+# keep it awake during the day.
+#
+# Note: GitHub cron can be delayed by several minutes and is paused after ~60
+# days without repository activity. For a stronger guarantee, also add a free
+# monitor at https://uptimerobot.com or https://cron-job.org hitting /health.
+on:
+  schedule:
+    - cron: '*/12 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the health endpoint
+        run: |
+          URL="${{ vars.API_BASE }}"
+          if [ -z "$URL" ]; then
+            URL="https://memory-circle-api.onrender.com"
+          fi
+          echo "Pinging $URL/health"
+          curl -sS --max-time 90 "$URL/health" || echo "Ping failed (the backend may still be waking up)."
