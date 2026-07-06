@@ -213,6 +213,8 @@ class Album {
     required this.id,
     required this.title,
     required this.description,
+    this.status = 'active',
+    this.removal,
     this.pages,
   });
 
@@ -220,6 +222,12 @@ class Album {
         id: _asInt(json['id']),
         title: _asText(json['title']),
         description: _asText(json['description']),
+        status: _asText(json['status']).isEmpty
+            ? 'active'
+            : _asText(json['status']),
+        removal: json['removal'] == null
+            ? null
+            : AlbumRemoval.fromJson(json['removal'] as Map<String, dynamic>),
         pages: json['pages'] == null
             ? null
             : [
@@ -231,7 +239,39 @@ class Album {
   final int id;
   final String title;
   final String description;
+  final String status;
+  final AlbumRemoval? removal;
   final List<AlbumPage>? pages;
+
+  bool get isPendingRemoval => status == 'pending_removal';
+}
+
+/// Progress of an approval-gated album removal.
+class AlbumRemoval {
+  const AlbumRemoval({
+    required this.approvalsHave,
+    required this.approvalsNeeded,
+    required this.voterIds,
+    this.requestedBy,
+  });
+
+  factory AlbumRemoval.fromJson(Map<String, dynamic> json) => AlbumRemoval(
+        approvalsHave: _asInt(json['approvals_have'] ?? 0),
+        approvalsNeeded: _asInt(json['approvals_needed'] ?? 0),
+        voterIds: [
+          for (final id in json['voter_ids'] as List<dynamic>? ?? const [])
+            _asInt(id),
+        ],
+        requestedBy:
+            json['requested_by'] == null ? null : _asInt(json['requested_by']),
+      );
+
+  final int approvalsHave;
+  final int approvalsNeeded;
+  final List<int> voterIds;
+  final int? requestedBy;
+
+  bool hasVoted(int? userId) => userId != null && voterIds.contains(userId);
 }
 
 class AlbumPage {

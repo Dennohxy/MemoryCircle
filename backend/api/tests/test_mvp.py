@@ -327,3 +327,53 @@ def test_album_edit_permissions(client):
         headers=auth(contributor),
     )
     assert denied.status_code == 403
+
+
+def test_album_removal_single_manager_is_immediate(client):
+    owner = register(client, "solo@test.com", "Solo")
+    circle = client.post("/circles", json={"name": "Solo Circle"}, headers=auth(owner)).json()
+    album = client.post(f"/circles/{circle['id']}/albums", json={"title": "Trip"}, headers=auth(owner)).json()
+
+    removed = client.post(f"/circles/{circle['id']}/albums/{album['id']}/retire", headers=auth(owner))
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["status"] == "removed"
+
+    listed = client.get(f"/circles/{circle['id']}/albums", headers=auth(owner)).json()
+    assert all(a["id"] != album["id"] for a in listed)
+
+
+def test_album_removal_needs_all_managers(client):
+    circle_id, owner, approver, contributor, viewer = setup_circle(client)
+    album = client.post(f"/circles/{circle_id}/albums", json={"title": "Reunion"}, headers=auth(owner)).json()
+
+    # Contributor cannot request removal.
+    denied = client.post(f"/circles/{circle_id}/albums/{album['id']}/retire", headers=auth(contributor))
+    assert denied.status_code == 403
+
+    # Owner requests; two managers (owner + approver) so it waits.
+    pending = client.post(f"/circles/{circle_id}/albums/{album['id']}/retire", headers=auth(owner))
+    assert pending.status_code == 200, pending.text
+    body = pending.json()
+    assert body["status"] == "pending_removal"
+    assert body["removal"]["approvals_have"] == 1
+    assert body["removal"]["approvals_needed"] == 2
+
+    # Still present in listings while pending.
+    listed = client.get(f"/circles/{circle_id}/albums", headers=auth(owner)).json()
+    assert any(a["id"] == album["id"] and a["status"] == "pending_removal" for a in listed)
+
+    # Second manager approves -> removed.
+    done = client.post(f"/circles/{circle_id}/albums/{album['id']}/retire/approve", headers=auth(approver))
+    assert done.status_code == 200, done.text
+    assert done.json()["status"] == "removed"
+    listed_after = client.get(f"/circles/{circle_id}/albums", headers=auth(owner)).json()
+    assert all(a["id"] != album["id"] for a in listed_after)
+
+
+def test_album_removal_can_be_cancelled(client):
+    circle_id, owner, approver, contributor, viewer = setup_circle(client)
+    album = client.post(f"/circles/{circle_id}/albums", json={"title": "Keep me"}, headers=auth(owner)).json()
+    client.post(f"/circles/{circle_id}/albums/{album['id']}/retire", headers=auth(owner))
+    cancelled = client.post(f"/circles/{circle_id}/albums/{album['id']}/retire/cancel", headers=auth(approver))
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "active"

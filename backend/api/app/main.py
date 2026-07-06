@@ -73,10 +73,28 @@ def ensure_asset_blob_columns():
                 connection.execute(text(f"ALTER TABLE photo_assets ADD COLUMN {column_name} {blob_type}"))
 
 
+def ensure_album_removal_columns():
+    """Adds album removal-workflow columns to databases created before them."""
+    inspector = sa_inspect(engine)
+    if "albums" not in inspector.get_table_names():
+        return
+    existing = {column["name"] for column in inspector.get_columns("albums")}
+    additions = {
+        "status": "VARCHAR(40) DEFAULT 'active'",
+        "removal_requested_by": "INTEGER",
+        "removal_votes_json": "TEXT DEFAULT '[]'",
+    }
+    with engine.begin() as connection:
+        for column_name, definition in additions.items():
+            if column_name not in existing:
+                connection.execute(text(f"ALTER TABLE albums ADD COLUMN {column_name} {definition}"))
+
+
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
     ensure_asset_blob_columns()
+    ensure_album_removal_columns()
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
 
@@ -271,7 +289,9 @@ def serialize_memory(memory: MemoryItem):
     }
 
 
-def serialize_album(album: Album, pages: Optional[list[AlbumPage]] = None):
+def serialize_album(album: Album, pages: Optional[list[AlbumPage]] = None, approvals_needed: Optional[int] = None):
+    status = getattr(album, "status", None) or "active"
+    votes = json.loads(getattr(album, "removal_votes_json", None) or "[]")
     data = {
         "id": album.id,
         "circle_id": album.circle_id,
@@ -279,6 +299,15 @@ def serialize_album(album: Album, pages: Optional[list[AlbumPage]] = None):
         "description": album.description,
         "template_key": album.template_key,
         "created_by": album.created_by,
+        "status": status,
+        "removal": {
+            "requested_by": album.removal_requested_by,
+            "approvals_have": len(votes),
+            "approvals_needed": approvals_needed if approvals_needed is not None else len(votes),
+            "voter_ids": votes,
+        }
+        if status == "pending_removal"
+        else None,
     }
     if pages is not None:
         data["pages"] = [serialize_page(page) for page in pages]
@@ -792,7 +821,8 @@ def create_album(circle_id: int, payload: AlbumIn, db: Session = Depends(get_db)
 def list_albums(circle_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
     require_member(db, circle_id, user)
     albums = db.scalars(select(Album).where(Album.circle_id == circle_id).order_by(Album.created_at.desc())).all()
-    return [serialize_album(album) for album in albums]
+    approvals_needed = len(album_manager_ids(db, circle_id))
+    return [serialize_album(album, approvals_needed=approvals_needed) for album in albums]
 
 
 @app.get("/circles/{circle_id}/albums/{album_id}")
@@ -801,8 +831,86 @@ def get_album(circle_id: int, album_id: int, db: Session = Depends(get_db), user
     album = db.get(Album, album_id)
     if not album or album.circle_id != circle_id:
         raise HTTPException(status_code=404, detail="Album not found")
+    approvals_needed = len(album_manager_ids(db, circle_id))
     pages = db.scalars(select(AlbumPage).where(AlbumPage.album_id == album_id).order_by(AlbumPage.page_number)).all()
-    return serialize_album(album, pages)
+    return serialize_album(album, pages, approvals_needed=approvals_needed)
+
+
+def album_manager_ids(db: Session, circle_id: int) -> list[int]:
+    """User ids allowed to manage albums (owners and reviewers)."""
+    members = db.scalars(
+        select(CircleMember).where(
+            CircleMember.circle_id == circle_id,
+            CircleMember.status == "active",
+        )
+    ).all()
+    return [member.user_id for member in members if member.role in APPROVE_ROLES]
+
+
+def delete_album_record(db: Session, album: Album):
+    db.execute(delete(AlbumPage).where(AlbumPage.album_id == album.id))
+    db.delete(album)
+
+
+@app.post("/circles/{circle_id}/albums/{album_id}/retire")
+def request_album_retire(circle_id: int, album_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, APPROVE_ROLES)
+    album = db.get(Album, album_id)
+    if not album or album.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Album not found")
+    managers = set(album_manager_ids(db, circle_id))
+    votes = {user.id}
+    if votes >= managers:
+        # The requester is the only album manager, so their approval is enough.
+        delete_album_record(db, album)
+        log_activity(db, circle_id, user.id, "album.removed", "album", album_id)
+        db.commit()
+        return {"status": "removed", "album_id": album_id}
+    album.status = "pending_removal"
+    album.removal_requested_by = user.id
+    album.removal_votes_json = json.dumps(sorted(votes))
+    log_activity(db, circle_id, user.id, "album.removal_requested", "album", album_id)
+    db.commit()
+    db.refresh(album)
+    return serialize_album(album, approvals_needed=len(managers))
+
+
+@app.post("/circles/{circle_id}/albums/{album_id}/retire/approve")
+def approve_album_retire(circle_id: int, album_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, APPROVE_ROLES)
+    album = db.get(Album, album_id)
+    if not album or album.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Album not found")
+    if album.status != "pending_removal":
+        raise HTTPException(status_code=400, detail="This album is not waiting to be removed")
+    managers = set(album_manager_ids(db, circle_id))
+    votes = set(json.loads(album.removal_votes_json or "[]"))
+    votes.add(user.id)
+    if votes >= managers:
+        delete_album_record(db, album)
+        log_activity(db, circle_id, user.id, "album.removed", "album", album_id)
+        db.commit()
+        return {"status": "removed", "album_id": album_id}
+    album.removal_votes_json = json.dumps(sorted(votes))
+    log_activity(db, circle_id, user.id, "album.removal_approved", "album", album_id)
+    db.commit()
+    db.refresh(album)
+    return serialize_album(album, approvals_needed=len(managers))
+
+
+@app.post("/circles/{circle_id}/albums/{album_id}/retire/cancel")
+def cancel_album_retire(circle_id: int, album_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, APPROVE_ROLES)
+    album = db.get(Album, album_id)
+    if not album or album.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Album not found")
+    album.status = "active"
+    album.removal_requested_by = None
+    album.removal_votes_json = "[]"
+    log_activity(db, circle_id, user.id, "album.removal_cancelled", "album", album_id)
+    db.commit()
+    db.refresh(album)
+    return serialize_album(album)
 
 
 @app.post("/circles/{circle_id}/albums/{album_id}/share-packages")

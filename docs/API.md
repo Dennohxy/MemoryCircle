@@ -39,6 +39,9 @@ Albums:
 - `GET /circles/{circle_id}/albums`
 - `GET /circles/{circle_id}/albums/{album_id}`
 - `PATCH /circles/{circle_id}/albums/{album_id}` (title/description; owner or reviewer)
+- `POST /circles/{circle_id}/albums/{album_id}/retire` (request removal; owner/reviewer)
+- `POST /circles/{circle_id}/albums/{album_id}/retire/approve` (approve a pending removal)
+- `POST /circles/{circle_id}/albums/{album_id}/retire/cancel` (keep the album)
 - `POST /circles/{circle_id}/albums/{album_id}/pages/generate`
 - `PATCH /circles/{circle_id}/albums/{album_id}/pages/{page_id}`
 

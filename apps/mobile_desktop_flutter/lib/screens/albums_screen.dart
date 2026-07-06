@@ -163,6 +163,76 @@ class _AlbumsViewState extends State<AlbumsView> {
     }
   }
 
+  Future<void> _requestRemoval(Album album) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Remove "${album.title}"?'),
+        content: const Text(
+            'This removes the album layout. The photos and stories stay in the '
+            'circle, so an album can be made again anytime. Other album '
+            'managers may need to approve before it is removed.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Keep album'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.rust),
+            child: const Text('Remove album'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final pending =
+          await widget.api.requestAlbumRemoval(widget.circle.id, album.id);
+      if (!mounted) return;
+      _refresh();
+      messenger.showSnackBar(SnackBar(
+        content: Text(pending == null
+            ? 'The album was removed.'
+            : 'Waiting for the other album managers to approve.'),
+      ));
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
+  Future<void> _approveRemoval(Album album) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final pending =
+          await widget.api.approveAlbumRemoval(widget.circle.id, album.id);
+      if (!mounted) return;
+      _refresh();
+      messenger.showSnackBar(SnackBar(
+        content: Text(pending == null
+            ? 'The album was removed.'
+            : 'Your approval was recorded.'),
+      ));
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
+  Future<void> _cancelRemoval(Album album) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await widget.api.cancelAlbumRemoval(widget.circle.id, album.id);
+      if (!mounted) return;
+      _refresh();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('The album will be kept.')),
+      );
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
   Future<void> _manageSharePackages(Album album) async {
     await showDialog<void>(
       context: context,
@@ -231,12 +301,16 @@ class _AlbumsViewState extends State<AlbumsView> {
                             canManage: widget.role.canReview,
                             canShare: widget.role.isOwner,
                             canAddPhotos: widget.role.canContribute,
+                            currentUserId: widget.api.currentUser?.id,
                             onOpen: () => _openAlbum(album),
                             onAddPhotos: () => _addPhotos(album),
                             onRename: () => _renameAlbum(album),
                             onRegenerate: () => _regeneratePages(album),
                             onShare: () => _shareAlbum(album),
                             onManageShares: () => _manageSharePackages(album),
+                            onRequestRemoval: () => _requestRemoval(album),
+                            onApproveRemoval: () => _approveRemoval(album),
+                            onCancelRemoval: () => _cancelRemoval(album),
                           ),
                       ],
                     ),
@@ -257,24 +331,32 @@ class _AlbumCover extends StatelessWidget {
     required this.canManage,
     required this.canShare,
     required this.canAddPhotos,
+    required this.currentUserId,
     required this.onOpen,
     required this.onAddPhotos,
     required this.onRename,
     required this.onRegenerate,
     required this.onShare,
     required this.onManageShares,
+    required this.onRequestRemoval,
+    required this.onApproveRemoval,
+    required this.onCancelRemoval,
   });
 
   final Album album;
   final bool canManage;
   final bool canShare;
   final bool canAddPhotos;
+  final int? currentUserId;
   final VoidCallback onOpen;
   final VoidCallback onAddPhotos;
   final VoidCallback onRename;
   final VoidCallback onRegenerate;
   final VoidCallback onShare;
   final VoidCallback onManageShares;
+  final VoidCallback onRequestRemoval;
+  final VoidCallback onApproveRemoval;
+  final VoidCallback onCancelRemoval;
 
   @override
   Widget build(BuildContext context) {
@@ -328,33 +410,36 @@ class _AlbumCover extends StatelessWidget {
                         ),
                       ],
                       const Spacer(),
-                      Row(
-                        children: [
-                          Text(
-                            'Open album',
-                            style: theme.textTheme.bodyMedium
-                                ?.copyWith(color: AppColors.gold),
-                          ),
-                          const SizedBox(width: Insets.xs),
-                          const Icon(Icons.arrow_forward,
-                              size: 16, color: AppColors.gold),
-                          const Spacer(),
-                          if (canAddPhotos)
-                            IconButton(
-                              tooltip: 'Add photos to this album',
-                              onPressed: onAddPhotos,
-                              icon: const Icon(
-                                  Icons.add_photo_alternate_outlined,
-                                  size: 20,
-                                  color: AppColors.gold),
+                      if (album.isPendingRemoval)
+                        _removalBanner(theme)
+                      else
+                        Row(
+                          children: [
+                            Text(
+                              'Open album',
+                              style: theme.textTheme.bodyMedium
+                                  ?.copyWith(color: AppColors.gold),
                             ),
-                        ],
-                      ),
+                            const SizedBox(width: Insets.xs),
+                            const Icon(Icons.arrow_forward,
+                                size: 16, color: AppColors.gold),
+                            const Spacer(),
+                            if (canAddPhotos)
+                              IconButton(
+                                tooltip: 'Add photos to this album',
+                                onPressed: onAddPhotos,
+                                icon: const Icon(
+                                    Icons.add_photo_alternate_outlined,
+                                    size: 20,
+                                    color: AppColors.gold),
+                              ),
+                          ],
+                        ),
                     ],
                   ),
                 ),
               ),
-              if (canManage || canShare)
+              if ((canManage || canShare) && !album.isPendingRemoval)
                 Positioned(
                   top: 4,
                   right: 4,
@@ -367,6 +452,8 @@ class _AlbumCover extends StatelessWidget {
                           onRename();
                         case 'regenerate':
                           onRegenerate();
+                        case 'remove':
+                          onRequestRemoval();
                         case 'share':
                           onShare();
                         case 'shares':
@@ -394,6 +481,13 @@ class _AlbumCover extends StatelessWidget {
                           child: Text('Manage share packages'),
                         ),
                       ],
+                      if (canManage) ...const [
+                        PopupMenuDivider(),
+                        PopupMenuItem(
+                          value: 'remove',
+                          child: Text('Remove album…'),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -401,6 +495,57 @@ class _AlbumCover extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _removalBanner(ThemeData theme) {
+    final removal = album.removal;
+    final alreadyVoted = removal?.hasVoted(currentUserId) ?? false;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.hourglass_top, size: 16, color: AppColors.gold),
+            const SizedBox(width: Insets.xs),
+            Expanded(
+              child: Text(
+                removal == null
+                    ? 'Waiting to be removed'
+                    : 'Waiting to be removed · ${removal.approvalsHave} of ${removal.approvalsNeeded} approved',
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(color: AppColors.onBackdropFaded),
+              ),
+            ),
+          ],
+        ),
+        if (canManage) ...[
+          const SizedBox(height: Insets.xs),
+          Row(
+            children: [
+              if (!alreadyVoted)
+                TextButton(
+                  onPressed: onApproveRemoval,
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.rust,
+                    padding: const EdgeInsets.symmetric(horizontal: Insets.sm),
+                    minimumSize: const Size(0, 32),
+                  ),
+                  child: const Text('Approve'),
+                ),
+              TextButton(
+                onPressed: onCancelRemoval,
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.gold,
+                  padding: const EdgeInsets.symmetric(horizontal: Insets.sm),
+                  minimumSize: const Size(0, 32),
+                ),
+                child: const Text('Keep'),
+              ),
+            ],
+          ),
+        ],
+      ],
     );
   }
 }

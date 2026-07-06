@@ -497,6 +497,29 @@ class ApiClient {
         '/circles/$circleId/albums/$albumId/share-packages/$packageId/revoke',
       ) as Map<String, dynamic>);
 
+  /// Requests removal of an album. Returns the removal progress, or null when
+  /// the album was removed straight away (the requester was the only manager).
+  Future<Album?> requestAlbumRemoval(int circleId, int albumId) async {
+    final data = await _post(
+      '/circles/$circleId/albums/$albumId/retire',
+    ) as Map<String, dynamic>;
+    if (data['status'] == 'removed') return null;
+    return Album.fromJson(data);
+  }
+
+  Future<Album?> approveAlbumRemoval(int circleId, int albumId) async {
+    final data = await _post(
+      '/circles/$circleId/albums/$albumId/retire/approve',
+    ) as Map<String, dynamic>;
+    if (data['status'] == 'removed') return null;
+    return Album.fromJson(data);
+  }
+
+  Future<Album> cancelAlbumRemoval(int circleId, int albumId) async =>
+      Album.fromJson(await _post(
+        '/circles/$circleId/albums/$albumId/retire/cancel',
+      ) as Map<String, dynamic>);
+
   // ---- Health ----
 
   Future<CircleHealth> circleHealth(int circleId) async =>

@@ -126,6 +126,11 @@ class Album(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     template_key: Mapped[str] = mapped_column(String(100), default="classic")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    # Removal needs approval from all album managers; "active" or
+    # "pending_removal". Votes hold the approving user ids.
+    status: Mapped[str] = mapped_column(String(40), default="active")
+    removal_requested_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    removal_votes_json: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
 
