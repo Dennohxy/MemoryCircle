@@ -129,6 +129,9 @@ class ApiClient {
             body: jsonEncode(body),
           )));
 
+  Future<dynamic> _delete(String path) async =>
+      _decode(await _run(() => http.delete(_uri(path), headers: _authHeaders)));
+
   // ---- Auth ----
 
   Future<UserProfile> register({
@@ -451,6 +454,10 @@ class ApiClient {
         '/circles/$circleId/memories/$memoryId',
         edits,
       ) as Map<String, dynamic>);
+
+  /// Removes a memory. If it was in the album, the album rebuilds without it.
+  Future<void> deleteMemory(int circleId, int memoryId) async =>
+      _delete('/circles/$circleId/memories/$memoryId');
 
   /// Approves a memory, optionally applying caption/story edits in the same
   /// step (the approve endpoint accepts a patch body).

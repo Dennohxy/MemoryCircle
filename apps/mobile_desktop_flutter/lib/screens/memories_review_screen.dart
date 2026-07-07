@@ -330,6 +330,53 @@ class _ReviewMemoryScreenState extends State<ReviewMemoryScreen> {
     if (confirmed == true && mounted) await _decide('reject');
   }
 
+  Future<void> _confirmRemove() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Remove this photo?'),
+        content: const Text(
+            'This takes the photo out of the album and deletes this memory. '
+            'This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Keep it'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.rust),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) await _remove();
+  }
+
+  Future<void> _remove() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    setState(() {
+      _busyAction = 'remove';
+      _error = null;
+    });
+    try {
+      await widget.api.deleteMemory(widget.circle.id, widget.memory.id);
+      messenger.showSnackBar(const SnackBar(
+        content: Text('The photo was removed from the album.'),
+      ));
+      navigator.pop(true);
+    } on ApiException catch (error) {
+      if (mounted) {
+        setState(() {
+          _error = error.message;
+          _busyAction = null;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final busy = _busyAction != null;
@@ -356,17 +403,36 @@ class _ReviewMemoryScreenState extends State<ReviewMemoryScreen> {
                   ),
                 ),
               if (widget.editOnly)
-                FilledButton.icon(
-                  onPressed: busy ? null : _saveEdits,
-                  icon: _busyAction == 'save'
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Icon(Icons.check),
-                  label: const Text('Save changes'),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: busy ? null : _saveEdits,
+                      icon: _busyAction == 'save'
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.check),
+                      label: const Text('Save changes'),
+                    ),
+                    const SizedBox(height: Insets.sm),
+                    TextButton.icon(
+                      onPressed: busy ? null : _confirmRemove,
+                      style:
+                          TextButton.styleFrom(foregroundColor: AppColors.rust),
+                      icon: _busyAction == 'remove'
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.delete_outline),
+                      label: const Text('Remove from album'),
+                    ),
+                  ],
                 )
               else
                 Wrap(

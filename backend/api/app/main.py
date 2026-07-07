@@ -960,6 +960,27 @@ def patch_memory(circle_id: int, memory_id: int, payload: MemoryPatch, db: Sessi
     return serialize_memory(memory)
 
 
+@app.delete("/circles/{circle_id}/memories/{memory_id}")
+def delete_memory(circle_id: int, memory_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Removes a memory. If it was in the album, every album in the circle is
+    rebuilt so the photo disappears from them."""
+    member = require_member(db, circle_id, user, WRITE_ROLES)
+    memory = db.get(MemoryItem, memory_id)
+    if not memory or memory.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Memory not found")
+    if member.role == "contributor" and memory.submitted_by != user.id:
+        raise HTTPException(status_code=403, detail="Contributors can remove only their own memories")
+    was_approved = memory.approval_status == "approved"
+    db.delete(memory)
+    log_activity(db, circle_id, user.id, "memory.deleted", "memory", memory_id)
+    db.flush()
+    if was_approved:
+        for album in db.scalars(select(Album).where(Album.circle_id == circle_id)).all():
+            rebuild_album_pages(db, album)
+    db.commit()
+    return {"status": "deleted", "memory_id": memory_id}
+
+
 @app.post("/circles/{circle_id}/memories/{memory_id}/submit")
 def submit_memory(circle_id: int, memory_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
     member = require_member(db, circle_id, user, WRITE_ROLES)
@@ -1276,16 +1297,14 @@ def page_layout(page_number: int, memories: list[MemoryItem], template: str):
     }
 
 
-@app.post("/circles/{circle_id}/albums/{album_id}/pages/generate")
-def generate_pages(circle_id: int, album_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    require_member(db, circle_id, user, APPROVE_ROLES)
-    album = db.get(Album, album_id)
-    if not album or album.circle_id != circle_id:
-        raise HTTPException(status_code=404, detail="Album not found")
-    db.execute(delete(AlbumPage).where(AlbumPage.album_id == album_id))
+def rebuild_album_pages(db: Session, album: Album) -> list[AlbumPage]:
+    """Regenerates an album's pages from the circle's approved memories.
+    Used by the generate endpoint and whenever the album contents change
+    (for example when a photo is removed)."""
+    db.execute(delete(AlbumPage).where(AlbumPage.album_id == album.id))
     memories = db.scalars(
         select(MemoryItem)
-        .where(MemoryItem.circle_id == circle_id, MemoryItem.approval_status == "approved")
+        .where(MemoryItem.circle_id == album.circle_id, MemoryItem.approval_status == "approved")
         .order_by(MemoryItem.memory_date.asc().nulls_last(), MemoryItem.approved_at.asc().nulls_last(), MemoryItem.created_at.asc())
     ).all()
     pages: list[AlbumPage] = []
@@ -1306,6 +1325,16 @@ def generate_pages(circle_id: int, album_id: int, db: Session = Depends(get_db),
         page_no += 1
         index += len(group)
         template_index += 1
+    return pages
+
+
+@app.post("/circles/{circle_id}/albums/{album_id}/pages/generate")
+def generate_pages(circle_id: int, album_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, APPROVE_ROLES)
+    album = db.get(Album, album_id)
+    if not album or album.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Album not found")
+    pages = rebuild_album_pages(db, album)
     log_activity(db, circle_id, user.id, "album.pages_generated", "album", album_id, {"page_count": len(pages)})
     db.commit()
     return [serialize_page(page) for page in pages]

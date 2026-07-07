@@ -447,3 +447,31 @@ def test_search_circle_and_request_to_join(client):
 
     # Non-owner cannot view or moderate requests.
     assert client.get(f"/circles/{circle_id}/join-requests", headers=auth(contributor)).status_code == 403
+
+
+def test_delete_memory_removes_it_from_the_album(client):
+    circle_id, owner, approver, contributor, viewer = setup_circle(client)
+    _, memory = upload_memory(client, circle_id, owner, status="pending")
+    client.post(f"/circles/{circle_id}/memories/{memory['id']}/approve", headers=auth(owner))
+    album = client.post(f"/circles/{circle_id}/albums", json={"title": "Trip"}, headers=auth(owner)).json()
+    client.post(f"/circles/{circle_id}/albums/{album['id']}/pages/generate", headers=auth(owner))
+
+    def photo_ids():
+        pages = client.get(f"/circles/{circle_id}/albums/{album['id']}", headers=auth(owner)).json()["pages"]
+        ids = []
+        for page in pages:
+            for entry in page["layout_json"].get("memories", []):
+                ids.append(entry["memory_id"])
+        return ids
+
+    assert memory["id"] in photo_ids()
+
+    # A viewer cannot delete.
+    assert client.delete(f"/circles/{circle_id}/memories/{memory['id']}", headers=auth(viewer)).status_code == 403
+
+    removed = client.delete(f"/circles/{circle_id}/memories/{memory['id']}", headers=auth(owner))
+    assert removed.status_code == 200, removed.text
+
+    # The album rebuilt without that photo, and the memory is gone.
+    assert memory["id"] not in photo_ids()
+    assert client.get(f"/circles/{circle_id}/memories/{memory['id']}", headers=auth(owner)).status_code == 404
