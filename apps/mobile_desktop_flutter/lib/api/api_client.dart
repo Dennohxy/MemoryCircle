@@ -254,6 +254,19 @@ class ApiClient {
         'role': role.apiValue,
       }) as Map<String, dynamic>);
 
+  /// Searches already-registered people by name or email so an owner can add
+  /// them to the circle without typing a full email.
+  Future<List<DirectoryPerson>> searchPeople(
+    int circleId,
+    String query,
+  ) async =>
+      [
+        for (final item in await _get(
+          '/circles/$circleId/member-search?q=${Uri.encodeQueryComponent(query)}',
+        ) as List<dynamic>)
+          DirectoryPerson.fromJson(item as Map<String, dynamic>),
+      ];
+
   // ---- Photos ----
 
   static const _imageSubtypes = {

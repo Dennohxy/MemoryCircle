@@ -377,3 +377,19 @@ def test_album_removal_can_be_cancelled(client):
     cancelled = client.post(f"/circles/{circle_id}/albums/{album['id']}/retire/cancel", headers=auth(approver))
     assert cancelled.status_code == 200, cancelled.text
     assert cancelled.json()["status"] == "active"
+
+
+def test_member_search_finds_registered_people(client):
+    circle_id, owner, approver, contributor, viewer = setup_circle(client)
+    register(client, "grandma@test.com", "Grandma Ada")
+
+    found = client.get(f"/circles/{circle_id}/member-search?q=grandma", headers=auth(owner)).json()
+    assert any(r["email"] == "grandma@test.com" and not r["already_member"] for r in found)
+
+    members = client.get(f"/circles/{circle_id}/member-search?q=approver", headers=auth(owner)).json()
+    assert any(r["email"] == "approver@test.com" and r["already_member"] for r in members)
+
+    assert client.get(f"/circles/{circle_id}/member-search?q=a", headers=auth(owner)).json() == []
+
+    denied = client.get(f"/circles/{circle_id}/member-search?q=grandma", headers=auth(contributor))
+    assert denied.status_code == 403

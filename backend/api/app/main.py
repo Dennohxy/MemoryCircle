@@ -533,6 +533,36 @@ def list_members(circle_id: int, db: Session = Depends(get_db), user: User = Dep
     return [serialize_member(member) for member in members]
 
 
+@app.get("/circles/{circle_id}/member-search")
+def member_search(circle_id: int, q: str = "", db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Owners search already-registered people by name or email to add them
+    to the circle directly."""
+    require_member(db, circle_id, user, {"owner"})
+    query = q.strip()
+    if len(query) < 2:
+        return []
+    like = f"%{query}%"
+    existing_ids = {
+        member.user_id
+        for member in db.scalars(
+            select(CircleMember).where(
+                CircleMember.circle_id == circle_id,
+                CircleMember.status == "active",
+            )
+        ).all()
+    }
+    rows = db.scalars(
+        select(User)
+        .where(or_(User.display_name.ilike(like), User.email.ilike(like)))
+        .order_by(User.display_name)
+        .limit(20)
+    ).all()
+    return [
+        {**user_public(person), "already_member": person.id in existing_ids}
+        for person in rows
+    ]
+
+
 @app.patch("/circles/{circle_id}/members/{member_id}")
 def patch_member(circle_id: int, member_id: int, payload: MemberPatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
     require_member(db, circle_id, user, {"owner"})

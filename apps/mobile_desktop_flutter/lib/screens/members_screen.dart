@@ -96,6 +96,19 @@ class _MembersViewState extends State<MembersView> {
     }
   }
 
+  /// Opens the search-by-name/email directory to add an already-registered
+  /// person to the circle.
+  Future<void> _addExisting() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _FindPeopleDialog(
+        api: widget.api,
+        circleId: widget.circle.id,
+      ),
+    );
+    if (mounted) _refresh();
+  }
+
   String _inviteMessage(String email, String name) {
     final base = Uri.base;
     // On the web this is the address the app is being used from; elsewhere
@@ -200,10 +213,20 @@ class _MembersViewState extends State<MembersView> {
                       ),
                     ),
                     if (widget.role.isOwner)
-                      FilledButton.tonalIcon(
-                        onPressed: _invite,
-                        icon: const Icon(Icons.person_add_alt),
-                        label: const Text('Invite someone'),
+                      Wrap(
+                        spacing: Insets.sm,
+                        children: [
+                          FilledButton.tonalIcon(
+                            onPressed: _addExisting,
+                            icon: const Icon(Icons.person_search),
+                            label: const Text('Find people'),
+                          ),
+                          OutlinedButton.icon(
+                            onPressed: _invite,
+                            icon: const Icon(Icons.person_add_alt),
+                            label: const Text('Invite'),
+                          ),
+                        ],
                       ),
                   ],
                 ),
@@ -386,6 +409,167 @@ class _InviteDialogState extends State<_InviteDialog> {
                   ))
               : null,
           child: const Text('Add to circle'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Owner-only directory: search already-registered people by name or email
+/// and add them straight into the circle.
+class _FindPeopleDialog extends StatefulWidget {
+  const _FindPeopleDialog({required this.api, required this.circleId});
+
+  final ApiClient api;
+  final int circleId;
+
+  @override
+  State<_FindPeopleDialog> createState() => _FindPeopleDialogState();
+}
+
+class _FindPeopleDialogState extends State<_FindPeopleDialog> {
+  final _searchController = TextEditingController();
+  Future<List<DirectoryPerson>>? _results;
+  final Set<int> _added = {};
+  int? _addingId;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _onQueryChanged(String value) {
+    final query = value.trim();
+    setState(() {
+      _results = query.length < 2
+          ? null
+          : widget.api.searchPeople(widget.circleId, query);
+    });
+  }
+
+  Future<void> _add(DirectoryPerson person) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _addingId = person.user.id);
+    try {
+      await widget.api.inviteMember(
+        widget.circleId,
+        email: person.user.email,
+        displayName: person.user.displayName,
+        role: CircleRole.contributor,
+      );
+      if (!mounted) return;
+      setState(() => _added.add(person.user.id));
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+            '${person.user.displayName} was added as a contributor. You can change their role anytime.'),
+      ));
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    } finally {
+      if (mounted) setState(() => _addingId = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('Find people to add'),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _searchController,
+              autofocus: true,
+              onChanged: _onQueryChanged,
+              decoration: appInput(
+                'Search by name or email',
+                prefixIcon: const Icon(Icons.search),
+              ),
+            ),
+            const SizedBox(height: Insets.md),
+            SizedBox(
+              height: 300,
+              child: _results == null
+                  ? Center(
+                      child: Text(
+                        'Type at least two letters to find people already on Memory Circle.',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: AppColors.softInk),
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  : FutureBuilder<List<DirectoryPerson>>(
+                      future: _results,
+                      builder: (context, snapshot) {
+                        if (snapshot.hasError) {
+                          return ErrorState(message: '${snapshot.error}');
+                        }
+                        if (!snapshot.hasData) {
+                          return const LoadingState(message: 'Searching…');
+                        }
+                        final people = snapshot.data!;
+                        if (people.isEmpty) {
+                          return Center(
+                            child: Text(
+                              'No one matched. They may not have an account yet — use "Invite" to bring them in by email or link.',
+                              style: theme.textTheme.bodySmall
+                                  ?.copyWith(color: AppColors.softInk),
+                              textAlign: TextAlign.center,
+                            ),
+                          );
+                        }
+                        return ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: people.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final person = people[index];
+                            final added = person.alreadyMember ||
+                                _added.contains(person.user.id);
+                            return ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: CircleAvatar(
+                                backgroundColor: AppColors.parchment,
+                                child: Text(
+                                  person.user.initials,
+                                  style: theme.textTheme.bodySmall
+                                      ?.copyWith(color: AppColors.deepGreen),
+                                ),
+                              ),
+                              title: Text(person.user.displayName),
+                              subtitle: Text(person.user.email),
+                              trailing: added
+                                  ? Text('In circle',
+                                      style: theme.textTheme.bodySmall
+                                          ?.copyWith(color: AppColors.softInk))
+                                  : _addingId == person.user.id
+                                      ? const SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2),
+                                        )
+                                      : FilledButton(
+                                          onPressed: () => _add(person),
+                                          child: const Text('Add'),
+                                        ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Done'),
         ),
       ],
     );

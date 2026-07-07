@@ -135,6 +135,21 @@ class Member {
   String get email => user?.email ?? '';
 }
 
+/// A registered person found via member search, with whether they are
+/// already in the circle.
+class DirectoryPerson {
+  const DirectoryPerson({required this.user, required this.alreadyMember});
+
+  factory DirectoryPerson.fromJson(Map<String, dynamic> json) =>
+      DirectoryPerson(
+        user: UserProfile.fromJson(json),
+        alreadyMember: json['already_member'] == true,
+      );
+
+  final UserProfile user;
+  final bool alreadyMember;
+}
+
 class PhotoAsset {
   const PhotoAsset({
     required this.id,
