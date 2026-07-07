@@ -25,10 +25,19 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
   UserProfile? _user;
   bool _ready = false;
 
+  /// A pending "join this circle" token read from the invite link URL
+  /// (`?join=...`), applied once the person is signed in.
+  String? _pendingJoinToken;
+
+  /// Bumped after joining a circle so the circle list reloads.
+  int _circlesReloadKey = 0;
+
   @override
   void initState() {
     super.initState();
     _api.onSessionExpired = _sessionExpired;
+    final token = Uri.base.queryParameters['join'];
+    if (token != null && token.isNotEmpty) _pendingJoinToken = token;
     _restoreSession();
   }
 
@@ -39,6 +48,31 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
         _user = user;
         _ready = true;
       });
+    }
+    await _maybeAcceptPendingJoin();
+  }
+
+  void _onSignedIn(UserProfile user) {
+    setState(() => _user = user);
+    _maybeAcceptPendingJoin();
+  }
+
+  /// If the app was opened from an invite link, join that circle now.
+  Future<void> _maybeAcceptPendingJoin() async {
+    final token = _pendingJoinToken;
+    if (token == null || _user == null) return;
+    _pendingJoinToken = null;
+    try {
+      final circle = await _api.acceptInviteLink(token);
+      if (!mounted) return;
+      setState(() => _circlesReloadKey++);
+      _messengerKey.currentState?.showSnackBar(SnackBar(
+        content: Text('You joined "${circle.name}"!'),
+      ));
+    } on ApiException {
+      _messengerKey.currentState?.showSnackBar(const SnackBar(
+        content: Text('That invite link is no longer active.'),
+      ));
     }
   }
 
@@ -72,9 +106,10 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
           : _user == null
               ? AuthScreen(
                   api: _api,
-                  onSignedIn: (user) => setState(() => _user = user),
+                  onSignedIn: _onSignedIn,
                 )
               : CirclesScreen(
+                  key: ValueKey(_circlesReloadKey),
                   api: _api,
                   user: _user!,
                   onSignOut: _signOut,

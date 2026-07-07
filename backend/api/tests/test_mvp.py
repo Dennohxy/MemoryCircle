@@ -393,3 +393,31 @@ def test_member_search_finds_registered_people(client):
 
     denied = client.get(f"/circles/{circle_id}/member-search?q=grandma", headers=auth(contributor))
     assert denied.status_code == 403
+
+
+def test_invite_link_join_flow(client):
+    circle_id, owner, approver, contributor, viewer = setup_circle(client)
+
+    link = client.post(
+        f"/circles/{circle_id}/invite-links",
+        json={"role": "contributor"},
+        headers=auth(owner),
+    )
+    assert link.status_code == 200, link.text
+    token = link.json()["token"]
+
+    info = client.get(f"/invite/{token}").json()
+    assert info["circle_name"] == "Otieno Family Memories"
+    assert info["role"] == "contributor"
+
+    newcomer = register(client, "cousin@test.com", "Cousin Zawadi")
+    joined = client.post(f"/invite/{token}/accept", headers=auth(newcomer))
+    assert joined.status_code == 200, joined.text
+    assert joined.json()["id"] == circle_id
+
+    circles = client.get("/circles", headers=auth(newcomer)).json()
+    assert any(c["id"] == circle_id for c in circles)
+
+    # Non-owner cannot mint links; bad token is rejected.
+    assert client.post(f"/circles/{circle_id}/invite-links", json={"role": "viewer"}, headers=auth(contributor)).status_code == 403
+    assert client.get("/invite/not-a-real-token").status_code == 404

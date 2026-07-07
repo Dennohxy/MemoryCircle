@@ -25,6 +25,7 @@ from .models import (
     ActivityLog,
     Album,
     AlbumPage,
+    CircleInviteLink,
     CircleMember,
     MemoryCircle,
     MemoryItem,
@@ -124,6 +125,10 @@ class CirclePatch(BaseModel):
 class InviteIn(BaseModel):
     email: EmailStr
     display_name: str = ""
+    role: str = "contributor"
+
+
+class InviteLinkIn(BaseModel):
     role: str = "contributor"
 
 
@@ -531,6 +536,67 @@ def list_members(circle_id: int, db: Session = Depends(get_db), user: User = Dep
     require_member(db, circle_id, user)
     members = db.scalars(select(CircleMember).where(CircleMember.circle_id == circle_id)).all()
     return [serialize_member(member) for member in members]
+
+
+@app.post("/circles/{circle_id}/invite-links")
+def create_invite_link(circle_id: int, payload: InviteLinkIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Creates a shareable link (for WhatsApp, Messenger, etc.) that lets
+    anyone who opens it join the circle."""
+    require_member(db, circle_id, user, {"owner"})
+    if payload.role not in ROLE_ORDER:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    link = CircleInviteLink(
+        circle_id=circle_id,
+        token=secrets.token_urlsafe(16),
+        role=payload.role,
+        created_by=user.id,
+    )
+    db.add(link)
+    log_activity(db, circle_id, user.id, "invite_link.created", "circle", circle_id, {"role": payload.role})
+    db.commit()
+    db.refresh(link)
+    return {"token": link.token, "role": link.role}
+
+
+@app.get("/invite/{token}")
+def invite_link_info(token: str, db: Session = Depends(get_db)):
+    """Public: shows what circle an invite link joins, before signing in."""
+    link = db.scalar(select(CircleInviteLink).where(CircleInviteLink.token == token))
+    if not link or link.revoked_at:
+        raise HTTPException(status_code=404, detail="This invite link is no longer active")
+    circle = db.get(MemoryCircle, link.circle_id)
+    if not circle:
+        raise HTTPException(status_code=404, detail="This invite link is no longer active")
+    inviter = db.get(User, link.created_by)
+    return {
+        "circle_name": circle.name,
+        "circle_description": circle.description,
+        "inviter_name": inviter.display_name if inviter else "",
+        "role": link.role,
+    }
+
+
+@app.post("/invite/{token}/accept")
+def accept_invite_link(token: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Joins the signed-in person to the circle the link points to."""
+    link = db.scalar(select(CircleInviteLink).where(CircleInviteLink.token == token))
+    if not link or link.revoked_at:
+        raise HTTPException(status_code=404, detail="This invite link is no longer active")
+    circle = db.get(MemoryCircle, link.circle_id)
+    if not circle:
+        raise HTTPException(status_code=404, detail="This invite link is no longer active")
+    member = member_for(db, link.circle_id, user.id)
+    if not member:
+        db.add(CircleMember(
+            circle_id=link.circle_id,
+            user_id=user.id,
+            role=link.role,
+            status="active",
+            invited_by=link.created_by,
+        ))
+        log_activity(db, link.circle_id, user.id, "invite_link.accepted", "circle", link.circle_id)
+        db.commit()
+    return serialize_circle(circle)
 
 
 @app.get("/circles/{circle_id}/member-search")

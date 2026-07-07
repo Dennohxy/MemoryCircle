@@ -254,6 +254,22 @@ class ApiClient {
         'role': role.apiValue,
       }) as Map<String, dynamic>);
 
+  /// Creates a shareable join link for the circle and returns its token.
+  Future<String> createInviteLink(
+    int circleId, {
+    CircleRole role = CircleRole.contributor,
+  }) async {
+    final data = await _post('/circles/$circleId/invite-links', {
+      'role': role.apiValue,
+    }) as Map<String, dynamic>;
+    return data['token'] as String;
+  }
+
+  /// Joins the signed-in person to the circle an invite link points to.
+  Future<Circle> acceptInviteLink(String token) async => Circle.fromJson(
+        await _post('/invite/$token/accept') as Map<String, dynamic>,
+      );
+
   /// Searches already-registered people by name or email so an owner can add
   /// them to the circle without typing a full email.
   Future<List<DirectoryPerson>> searchPeople(

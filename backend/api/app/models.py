@@ -117,6 +117,20 @@ class MemoryItem(Base):
     asset = relationship("PhotoAsset")
 
 
+class CircleInviteLink(Base):
+    """A shareable link that lets anyone who opens it join a circle."""
+
+    __tablename__ = "circle_invite_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    circle_id: Mapped[int] = mapped_column(ForeignKey("memory_circles.id"), index=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    role: Mapped[str] = mapped_column(String(40), default="contributor")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 class Album(Base):
     __tablename__ = "albums"
 

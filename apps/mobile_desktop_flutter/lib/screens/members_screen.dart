@@ -96,6 +96,36 @@ class _MembersViewState extends State<MembersView> {
     }
   }
 
+  /// Creates a shareable join link and opens the share sheet so the owner can
+  /// send it through WhatsApp, Messenger, SMS, or any other app. Whoever opens
+  /// the link joins the circle after signing in — no email needed up front.
+  Future<void> _inviteWithLink() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final token = await widget.api.createInviteLink(widget.circle.id);
+      if (!mounted) return;
+      final base = Uri.base;
+      final origin = base.scheme.startsWith('http')
+          ? '${base.scheme}://${base.authority}${base.path}'
+          : 'https://dennohxy.github.io/MemoryCircle/';
+      final url = '$origin?join=$token';
+      final inviter = widget.api.currentUser?.displayName ?? 'Your family';
+      final message = '$inviter invited you to "${widget.circle.name}" on '
+          'Memory Circle — our private family photo album.\n\n'
+          'Tap to join:\n$url';
+      try {
+        await Share.share(message, subject: 'Join our Memory Circle');
+      } catch (_) {
+        await Clipboard.setData(ClipboardData(text: message));
+        messenger.showSnackBar(const SnackBar(
+          content: Text('Invite link copied — paste it into any chat.'),
+        ));
+      }
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
   /// Opens the search-by-name/email directory to add an already-registered
   /// person to the circle.
   Future<void> _addExisting() async {
@@ -212,24 +242,32 @@ class _MembersViewState extends State<MembersView> {
                             ?.copyWith(color: AppColors.softInk),
                       ),
                     ),
-                    if (widget.role.isOwner)
-                      Wrap(
-                        spacing: Insets.sm,
-                        children: [
-                          FilledButton.tonalIcon(
-                            onPressed: _addExisting,
-                            icon: const Icon(Icons.person_search),
-                            label: const Text('Find people'),
-                          ),
-                          OutlinedButton.icon(
-                            onPressed: _invite,
-                            icon: const Icon(Icons.person_add_alt),
-                            label: const Text('Invite'),
-                          ),
-                        ],
-                      ),
                   ],
                 ),
+                if (widget.role.isOwner) ...[
+                  const SizedBox(height: Insets.sm + Insets.xs),
+                  Wrap(
+                    spacing: Insets.sm,
+                    runSpacing: Insets.sm,
+                    children: [
+                      FilledButton.tonalIcon(
+                        onPressed: _inviteWithLink,
+                        icon: const Icon(Icons.link),
+                        label: const Text('Invite link'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _addExisting,
+                        icon: const Icon(Icons.person_search),
+                        label: const Text('Find people'),
+                      ),
+                      TextButton.icon(
+                        onPressed: _invite,
+                        icon: const Icon(Icons.mail_outline),
+                        label: const Text('By email'),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: Insets.md),
                 for (final member in members) ...[
                   PaperCard(
