@@ -117,6 +117,20 @@ class MemoryItem(Base):
     asset = relationship("PhotoAsset")
 
 
+class CircleJoinRequest(Base):
+    """A request from a signed-in person to be added to a circle they found
+    by searching. The circle owner approves or declines it."""
+
+    __tablename__ = "circle_join_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    circle_id: Mapped[int] = mapped_column(ForeignKey("memory_circles.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
 class CircleInviteLink(Base):
     """A shareable link that lets anyone who opens it join a circle."""
 

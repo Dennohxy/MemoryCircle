@@ -421,3 +421,29 @@ def test_invite_link_join_flow(client):
     # Non-owner cannot mint links; bad token is rejected.
     assert client.post(f"/circles/{circle_id}/invite-links", json={"role": "viewer"}, headers=auth(contributor)).status_code == 403
     assert client.get("/invite/not-a-real-token").status_code == 404
+
+
+def test_search_circle_and_request_to_join(client):
+    circle_id, owner, approver, contributor, viewer = setup_circle(client)
+    outsider = register(client, "neighbor@test.com", "Neighbor Njeri")
+
+    # Search finds the circle by name.
+    found = client.get("/circles/search?q=otieno", headers=auth(outsider)).json()
+    assert any(c["id"] == circle_id and not c["is_member"] and c["request_status"] is None for c in found)
+
+    # Request to join -> pending, and the search now reflects it.
+    req = client.post(f"/circles/{circle_id}/join-requests", headers=auth(outsider))
+    assert req.status_code == 200, req.text
+    request_id = req.json()["id"]
+    again = client.get("/circles/search?q=otieno", headers=auth(outsider)).json()
+    assert any(c["id"] == circle_id and c["request_status"] == "pending" for c in again)
+
+    # Owner sees and approves it; outsider becomes a member.
+    pending = client.get(f"/circles/{circle_id}/join-requests", headers=auth(owner)).json()
+    assert any(r["id"] == request_id and r["user"]["email"] == "neighbor@test.com" for r in pending)
+    approved = client.post(f"/circles/{circle_id}/join-requests/{request_id}/approve", headers=auth(owner))
+    assert approved.status_code == 200, approved.text
+    assert any(c["id"] == circle_id for c in client.get("/circles", headers=auth(outsider)).json())
+
+    # Non-owner cannot view or moderate requests.
+    assert client.get(f"/circles/{circle_id}/join-requests", headers=auth(contributor)).status_code == 403

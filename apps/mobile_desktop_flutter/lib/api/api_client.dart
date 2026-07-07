@@ -214,6 +214,33 @@ class ApiClient {
         'description': description,
       }) as Map<String, dynamic>);
 
+  /// Finds circles by name so a person can ask to join one.
+  Future<List<CircleSearchResult>> searchCircles(String query) async => [
+        for (final item in await _get(
+          '/circles/search?q=${Uri.encodeQueryComponent(query)}',
+        ) as List<dynamic>)
+          CircleSearchResult.fromJson(item as Map<String, dynamic>),
+      ];
+
+  /// Asks to join a circle; returns the request status (e.g. "pending").
+  Future<String> requestToJoin(int circleId) async {
+    final data =
+        await _post('/circles/$circleId/join-requests') as Map<String, dynamic>;
+    return (data['status'] as String?) ?? 'pending';
+  }
+
+  Future<List<JoinRequest>> listJoinRequests(int circleId) async => [
+        for (final item
+            in await _get('/circles/$circleId/join-requests') as List<dynamic>)
+          JoinRequest.fromJson(item as Map<String, dynamic>),
+      ];
+
+  Future<void> approveJoinRequest(int circleId, int requestId) async =>
+      _post('/circles/$circleId/join-requests/$requestId/approve');
+
+  Future<void> declineJoinRequest(int circleId, int requestId) async =>
+      _post('/circles/$circleId/join-requests/$requestId/decline');
+
   Future<Circle> updateCircle(
     int circleId, {
     String? name,

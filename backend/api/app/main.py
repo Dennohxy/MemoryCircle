@@ -26,6 +26,7 @@ from .models import (
     Album,
     AlbumPage,
     CircleInviteLink,
+    CircleJoinRequest,
     CircleMember,
     MemoryCircle,
     MemoryItem,
@@ -480,6 +481,112 @@ def list_circles(db: Session = Depends(get_db), user: User = Depends(current_use
         .order_by(MemoryCircle.created_at.desc())
     ).all()
     return [serialize_circle(row) for row in rows]
+
+
+def latest_join_request(db: Session, circle_id: int, user_id: int) -> Optional[CircleJoinRequest]:
+    return db.scalar(
+        select(CircleJoinRequest)
+        .where(CircleJoinRequest.circle_id == circle_id, CircleJoinRequest.user_id == user_id)
+        .order_by(CircleJoinRequest.created_at.desc())
+    )
+
+
+def serialize_join_request(db: Session, request: CircleJoinRequest):
+    person = db.get(User, request.user_id)
+    return {
+        "id": request.id,
+        "circle_id": request.circle_id,
+        "user_id": request.user_id,
+        "status": request.status,
+        "user": user_public(person) if person else None,
+        "created_at": request.created_at,
+    }
+
+
+@app.get("/circles/search")
+def search_circles(q: str = "", db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Finds circles by name so a person can ask to join one."""
+    query = q.strip()
+    if len(query) < 2:
+        return []
+    like = f"%{query}%"
+    circles = db.scalars(
+        select(MemoryCircle).where(MemoryCircle.name.ilike(like)).order_by(MemoryCircle.name).limit(20)
+    ).all()
+    results = []
+    for circle in circles:
+        member = member_for(db, circle.id, user.id)
+        request = latest_join_request(db, circle.id, user.id)
+        results.append({
+            "id": circle.id,
+            "name": circle.name,
+            "description": circle.description,
+            "is_member": member is not None,
+            "request_status": request.status if request else None,
+        })
+    return results
+
+
+@app.post("/circles/{circle_id}/join-requests")
+def request_to_join(circle_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    circle = db.get(MemoryCircle, circle_id)
+    if not circle:
+        raise HTTPException(status_code=404, detail="Circle not found")
+    if member_for(db, circle_id, user.id):
+        raise HTTPException(status_code=400, detail="You are already in this circle")
+    existing = latest_join_request(db, circle_id, user.id)
+    if existing and existing.status == "pending":
+        return serialize_join_request(db, existing)
+    request = CircleJoinRequest(circle_id=circle_id, user_id=user.id, status="pending")
+    db.add(request)
+    log_activity(db, circle_id, user.id, "join_request.created", "circle", circle_id)
+    db.commit()
+    db.refresh(request)
+    return serialize_join_request(db, request)
+
+
+@app.get("/circles/{circle_id}/join-requests")
+def list_join_requests(circle_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, {"owner"})
+    requests = db.scalars(
+        select(CircleJoinRequest)
+        .where(CircleJoinRequest.circle_id == circle_id, CircleJoinRequest.status == "pending")
+        .order_by(CircleJoinRequest.created_at.asc())
+    ).all()
+    return [serialize_join_request(db, request) for request in requests]
+
+
+@app.post("/circles/{circle_id}/join-requests/{request_id}/approve")
+def approve_join_request(circle_id: int, request_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, {"owner"})
+    request = db.get(CircleJoinRequest, request_id)
+    if not request or request.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Request not found")
+    if not member_for(db, circle_id, request.user_id):
+        db.add(CircleMember(
+            circle_id=circle_id,
+            user_id=request.user_id,
+            role="contributor",
+            status="active",
+            invited_by=user.id,
+        ))
+    request.status = "approved"
+    log_activity(db, circle_id, user.id, "join_request.approved", "member", request.user_id)
+    db.commit()
+    db.refresh(request)
+    return serialize_join_request(db, request)
+
+
+@app.post("/circles/{circle_id}/join-requests/{request_id}/decline")
+def decline_join_request(circle_id: int, request_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, {"owner"})
+    request = db.get(CircleJoinRequest, request_id)
+    if not request or request.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Request not found")
+    request.status = "declined"
+    log_activity(db, circle_id, user.id, "join_request.declined", "member", request.user_id)
+    db.commit()
+    return {"status": "declined"}
 
 
 @app.get("/circles/{circle_id}")

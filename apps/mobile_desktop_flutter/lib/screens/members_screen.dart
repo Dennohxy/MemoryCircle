@@ -28,9 +28,36 @@ class MembersView extends StatefulWidget {
 
 class _MembersViewState extends State<MembersView> {
   late Future<List<Member>> _members = widget.api.listMembers(widget.circle.id);
+  late Future<List<JoinRequest>> _joinRequests = _loadJoinRequests();
 
-  void _refresh() =>
-      setState(() => _members = widget.api.listMembers(widget.circle.id));
+  Future<List<JoinRequest>> _loadJoinRequests() => widget.role.isOwner
+      ? widget.api.listJoinRequests(widget.circle.id)
+      : Future.value(const []);
+
+  void _refresh() => setState(() {
+        _members = widget.api.listMembers(widget.circle.id);
+        _joinRequests = _loadJoinRequests();
+      });
+
+  Future<void> _answerJoinRequest(JoinRequest request, bool approve) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      if (approve) {
+        await widget.api.approveJoinRequest(widget.circle.id, request.id);
+      } else {
+        await widget.api.declineJoinRequest(widget.circle.id, request.id);
+      }
+      if (!mounted) return;
+      _refresh();
+      messenger.showSnackBar(SnackBar(
+        content: Text(approve
+            ? '${request.displayName} was added to the circle.'
+            : 'Request from ${request.displayName} was declined.'),
+      ));
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
 
   Future<void> _editRole(Member member) async {
     final chosen = await showDialog<CircleRole>(
@@ -268,6 +295,73 @@ class _MembersViewState extends State<MembersView> {
                     ],
                   ),
                 ],
+                if (widget.role.isOwner)
+                  FutureBuilder<List<JoinRequest>>(
+                    future: _joinRequests,
+                    builder: (context, snap) {
+                      final requests = snap.data ?? const <JoinRequest>[];
+                      if (requests.isEmpty) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: Insets.md),
+                        child: PaperCard(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Requests to join',
+                                  style: theme.textTheme.titleMedium),
+                              const SizedBox(height: Insets.sm),
+                              for (final request in requests) ...[
+                                Row(
+                                  children: [
+                                    CircleAvatar(
+                                      radius: 18,
+                                      backgroundColor: AppColors.parchment,
+                                      child: Text(
+                                        initialsFor(request.displayName),
+                                        style: theme.textTheme.bodySmall
+                                            ?.copyWith(
+                                                color: AppColors.deepGreen),
+                                      ),
+                                    ),
+                                    const SizedBox(
+                                        width: Insets.sm + Insets.xs),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(request.displayName,
+                                              style: theme.textTheme.bodyLarge),
+                                          if (request.email.isNotEmpty)
+                                            Text(request.email,
+                                                style: theme.textTheme.bodySmall
+                                                    ?.copyWith(
+                                                        color:
+                                                            AppColors.softInk)),
+                                        ],
+                                      ),
+                                    ),
+                                    TextButton(
+                                      onPressed: () =>
+                                          _answerJoinRequest(request, false),
+                                      child: const Text('Decline'),
+                                    ),
+                                    const SizedBox(width: Insets.xs),
+                                    FilledButton(
+                                      onPressed: () =>
+                                          _answerJoinRequest(request, true),
+                                      child: const Text('Approve'),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: Insets.sm),
+                              ],
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                 const SizedBox(height: Insets.md),
                 for (final member in members) ...[
                   PaperCard(

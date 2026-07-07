@@ -45,6 +45,15 @@ class _CirclesScreenState extends State<CirclesScreen> {
 
   void _refresh() => setState(() => _circles = _load());
 
+  /// Opens the search dialog to find a circle by name and ask to join.
+  Future<void> _findCircle() async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _FindCircleDialog(api: widget.api),
+    );
+    if (mounted) _refresh();
+  }
+
   Future<void> _openCircle(Circle circle) async {
     await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => CircleShell(api: widget.api, circle: circle),
@@ -82,6 +91,11 @@ class _CirclesScreenState extends State<CirclesScreen> {
       appBar: AppBar(
         title: const Text('My Memory Circles'),
         actions: [
+          IconButton(
+            tooltip: 'Find a circle',
+            icon: const Icon(Icons.travel_explore),
+            onPressed: _findCircle,
+          ),
           PopupMenuButton<String>(
             tooltip: 'Account',
             onSelected: (value) {
@@ -256,6 +270,162 @@ class _CreateCircleDialogState extends State<_CreateCircleDialog> {
                   ))
               : null,
           child: const Text('Create circle'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Search circles by name and ask to join one; the owner decides.
+class _FindCircleDialog extends StatefulWidget {
+  const _FindCircleDialog({required this.api});
+
+  final ApiClient api;
+
+  @override
+  State<_FindCircleDialog> createState() => _FindCircleDialogState();
+}
+
+class _FindCircleDialogState extends State<_FindCircleDialog> {
+  final _searchController = TextEditingController();
+  Future<List<CircleSearchResult>>? _results;
+  final Set<int> _requested = {};
+  int? _requestingId;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _onQueryChanged(String value) {
+    final query = value.trim();
+    setState(() {
+      _results = query.length < 2 ? null : widget.api.searchCircles(query);
+    });
+  }
+
+  Future<void> _request(CircleSearchResult circle) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _requestingId = circle.id);
+    try {
+      await widget.api.requestToJoin(circle.id);
+      if (!mounted) return;
+      setState(() => _requested.add(circle.id));
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+            'Your request to join "${circle.name}" was sent. The circle owner will decide.'),
+      ));
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    } finally {
+      if (mounted) setState(() => _requestingId = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('Find a circle'),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _searchController,
+              autofocus: true,
+              onChanged: _onQueryChanged,
+              decoration: appInput(
+                'Search by circle name',
+                prefixIcon: const Icon(Icons.search),
+              ),
+            ),
+            const SizedBox(height: Insets.md),
+            SizedBox(
+              height: 300,
+              child: _results == null
+                  ? Center(
+                      child: Text(
+                        'Type at least two letters to find a family circle to join.',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: AppColors.softInk),
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  : FutureBuilder<List<CircleSearchResult>>(
+                      future: _results,
+                      builder: (context, snapshot) {
+                        if (snapshot.hasError) {
+                          return ErrorState(message: '${snapshot.error}');
+                        }
+                        if (!snapshot.hasData) {
+                          return const LoadingState(message: 'Searching…');
+                        }
+                        final circles = snapshot.data!;
+                        if (circles.isEmpty) {
+                          return Center(
+                            child: Text(
+                              'No circles matched that name.',
+                              style: theme.textTheme.bodySmall
+                                  ?.copyWith(color: AppColors.softInk),
+                              textAlign: TextAlign.center,
+                            ),
+                          );
+                        }
+                        return ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: circles.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (context, index) {
+                            final circle = circles[index];
+                            final requested = circle.isPending ||
+                                _requested.contains(circle.id);
+                            final Widget trailing;
+                            if (circle.isMember) {
+                              trailing = Text('Joined',
+                                  style: theme.textTheme.bodySmall
+                                      ?.copyWith(color: AppColors.softInk));
+                            } else if (requested) {
+                              trailing = Text('Requested',
+                                  style: theme.textTheme.bodySmall
+                                      ?.copyWith(color: AppColors.softInk));
+                            } else if (_requestingId == circle.id) {
+                              trailing = const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
+                              );
+                            } else {
+                              trailing = FilledButton(
+                                onPressed: () => _request(circle),
+                                child: const Text('Request'),
+                              );
+                            }
+                            return ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: Text(circle.name),
+                              subtitle: circle.description.isEmpty
+                                  ? null
+                                  : Text(circle.description,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis),
+                              trailing: trailing,
+                            );
+                          },
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Done'),
         ),
       ],
     );

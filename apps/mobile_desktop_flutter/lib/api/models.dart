@@ -150,6 +150,53 @@ class DirectoryPerson {
   final bool alreadyMember;
 }
 
+/// A circle found by name search, with whether the searcher is already a
+/// member or has a pending/answered request.
+class CircleSearchResult {
+  const CircleSearchResult({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.isMember,
+    this.requestStatus,
+  });
+
+  factory CircleSearchResult.fromJson(Map<String, dynamic> json) =>
+      CircleSearchResult(
+        id: _asInt(json['id']),
+        name: _asText(json['name']),
+        description: _asText(json['description']),
+        isMember: json['is_member'] == true,
+        requestStatus: json['request_status'] as String?,
+      );
+
+  final int id;
+  final String name;
+  final String description;
+  final bool isMember;
+  final String? requestStatus;
+
+  bool get isPending => requestStatus == 'pending';
+}
+
+/// A pending request from someone asking to join a circle.
+class JoinRequest {
+  const JoinRequest({required this.id, this.user});
+
+  factory JoinRequest.fromJson(Map<String, dynamic> json) => JoinRequest(
+        id: _asInt(json['id']),
+        user: json['user'] == null
+            ? null
+            : UserProfile.fromJson(json['user'] as Map<String, dynamic>),
+      );
+
+  final int id;
+  final UserProfile? user;
+
+  String get displayName => user?.displayName ?? 'Someone';
+  String get email => user?.email ?? '';
+}
+
 class PhotoAsset {
   const PhotoAsset({
     required this.id,
