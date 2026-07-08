@@ -40,7 +40,11 @@ class MemoryCard extends StatelessWidget {
                       child:
                           Icon(Icons.photo_outlined, color: AppColors.softInk),
                     )
-                  : AuthedImage(api: api, path: memory.asset!.thumbnailUrl),
+                  : AuthedImage(
+                      api: api,
+                      path: memory.asset!.thumbnailUrl,
+                      cacheWidth: 200,
+                    ),
             ),
           ),
           const SizedBox(width: Insets.md),

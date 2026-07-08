@@ -12,11 +12,17 @@ class AuthedImage extends StatefulWidget {
     required this.api,
     required this.path,
     this.fit = BoxFit.cover,
+    this.cacheWidth,
   });
 
   final ApiClient api;
   final String path;
   final BoxFit fit;
+
+  /// Decode the image downscaled to about this pixel width instead of at full
+  /// resolution. Cuts memory and decode time sharply for large photos shown
+  /// small (e.g. grid tiles). Flutter never upscales past the source size.
+  final int? cacheWidth;
 
   @override
   State<AuthedImage> createState() => _AuthedImageState();
@@ -56,6 +62,8 @@ class _AuthedImageState extends State<AuthedImage> {
           snapshot.data!,
           fit: widget.fit,
           gaplessPlayback: true,
+          cacheWidth: widget.cacheWidth,
+          filterQuality: FilterQuality.medium,
         );
       },
     );

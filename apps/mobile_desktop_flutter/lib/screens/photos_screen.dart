@@ -190,8 +190,10 @@ class _PhotoTile extends StatelessWidget {
               color: const Color(0xFFEFE8D8),
               child: AuthedImage(
                 api: api,
-                path: photo.asset.displayUrl,
+                // Grid tiles use the small thumbnail, not the full-size photo.
+                path: photo.asset.thumbnailUrl,
                 fit: BoxFit.contain,
+                cacheWidth: 400,
               ),
             ),
           ),

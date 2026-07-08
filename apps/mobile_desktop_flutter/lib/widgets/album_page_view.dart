@@ -116,6 +116,7 @@ class _TitleLayout extends StatelessWidget {
                   api: api,
                   path: cover['display_url'] as String? ?? '',
                   fit: BoxFit.contain,
+                  cacheWidth: 1400,
                 ),
               ),
             ),
@@ -369,9 +370,19 @@ Widget _photo(
     tapeTint: palette.accent,
     child: ColoredBox(
       color: const Color(0xFFEFE8D8),
-      child: SizedBox.expand(
-        child: AuthedImage(api: api, path: path, fit: BoxFit.contain),
-      ),
+      // Cap decode resolution: album prints never need the full 1600px source.
+      child: _sizedPhoto(api, path, thumbnail ? 500 : 1400),
+    ),
+  );
+}
+
+Widget _sizedPhoto(ApiClient api, String path, int cacheWidth) {
+  return SizedBox.expand(
+    child: AuthedImage(
+      api: api,
+      path: path,
+      fit: BoxFit.contain,
+      cacheWidth: cacheWidth,
     ),
   );
 }
