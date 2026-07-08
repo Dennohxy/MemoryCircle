@@ -185,6 +185,28 @@ class ApiClient {
     return currentUser;
   }
 
+  Future<void> registerNotificationSubscription({
+    required String endpoint,
+    String provider = 'local',
+    String deviceLabel = '',
+  }) async {
+    await _post('/me/notification-subscriptions', {
+      'provider': provider,
+      'endpoint': endpoint,
+      'device_label': deviceLabel,
+    });
+  }
+
+  Future<List<AppNotification>> listNotifications({
+    bool unreadOnly = true,
+  }) async {
+    final query = unreadOnly ? '?unread_only=true' : '?unread_only=false';
+    return [
+      for (final item in await _get('/me/notifications$query') as List<dynamic>)
+        AppNotification.fromJson(item as Map<String, dynamic>),
+    ];
+  }
+
   /// The email used for the last sign-in on this device, for prefilling.
   Future<String?> lastEmail() async =>
       (await SharedPreferences.getInstance()).getString(_emailPref);
@@ -386,6 +408,19 @@ class ApiClient {
     ];
   }
 
+  Future<List<UploadedPhoto>> listUploadedPhotos(int circleId) async => [
+        for (final item
+            in await _get('/circles/$circleId/photos') as List<dynamic>)
+          UploadedPhoto.fromJson(item as Map<String, dynamic>),
+      ];
+
+  Future<ApprovalSendResult> sendUnapprovedPhotosForApproval(
+    int circleId,
+  ) async =>
+      ApprovalSendResult.fromJson(await _post(
+        '/circles/$circleId/photos/send-for-approval',
+      ) as Map<String, dynamic>);
+
   Future<Memory> updateMemory(
     int circleId,
     int memoryId,
@@ -430,10 +465,12 @@ class ApiClient {
     int circleId, {
     required String title,
     String description = '',
+    int targetPhotoCount = 24,
   }) async =>
       Album.fromJson(await _post('/circles/$circleId/albums', {
         'title': title,
         'description': description,
+        'target_photo_count': targetPhotoCount,
       }) as Map<String, dynamic>);
 
   Future<void> generateAlbumPages(int circleId, int albumId) async =>
@@ -444,10 +481,16 @@ class ApiClient {
     int albumId, {
     String? title,
     String? description,
+    int? targetPhotoCount,
+    int? coverMemoryId,
+    List<int>? memorySequence,
   }) async =>
       Album.fromJson(await _patchJson('/circles/$circleId/albums/$albumId', {
         if (title != null) 'title': title,
         if (description != null) 'description': description,
+        if (targetPhotoCount != null) 'target_photo_count': targetPhotoCount,
+        if (coverMemoryId != null) 'cover_memory_id': coverMemoryId,
+        if (memorySequence != null) 'memory_sequence': memorySequence,
       }) as Map<String, dynamic>);
 
   Future<Album> getAlbum(int circleId, int albumId) async => Album.fromJson(

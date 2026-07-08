@@ -51,6 +51,9 @@ def run_seed(reset: bool = False):
     for key, role in [("approver", "approver"), ("contributor", "contributor"), ("viewer", "viewer")]:
         name, email, _ = USERS[key]
         client.post(f"/circles/{circle_id}/invites", json={"display_name": name, "email": email, "role": role}, headers=headers)
+    member_headers = [headers]
+    for key in ("approver", "contributor", "viewer"):
+        member_headers.append({"Authorization": f"Bearer {register(client, key)}"})
     statuses = ["approved"] * 8 + ["pending", "rejected"]
     for index, status in enumerate(statuses, start=1):
         upload = client.post(
@@ -72,7 +75,8 @@ def run_seed(reset: bool = False):
             headers=headers,
         ).json()
         if status == "approved":
-            client.post(f"/circles/{circle_id}/memories/{memory['id']}/approve", headers=headers)
+            for member_header in member_headers:
+                client.post(f"/circles/{circle_id}/memories/{memory['id']}/approve", headers=member_header)
         elif status == "rejected":
             client.post(f"/circles/{circle_id}/memories/{memory['id']}/reject", headers=headers)
     album = client.post(

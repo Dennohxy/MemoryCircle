@@ -13,6 +13,23 @@ scripts/                      Development helpers
 video/                        Reserved for video assets
 ```
 
+## Co-Managed Flow
+
+This repo is co-managed by human maintainers, Codex, and Claude. Use
+[docs/CO_MANAGEMENT.md](docs/CO_MANAGEMENT.md) as the shared workflow.
+
+Before starting work:
+
+```bash
+./scripts/repo_sync.sh
+```
+
+Before handing off or opening a PR:
+
+```bash
+./scripts/repo_publish.sh
+```
+
 ## Run Backend
 
 ```bash

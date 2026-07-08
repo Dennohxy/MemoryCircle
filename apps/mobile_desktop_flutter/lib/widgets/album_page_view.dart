@@ -44,7 +44,7 @@ class AlbumPageView extends StatelessWidget {
         children: [
           Expanded(
             child: template == 'event_title'
-                ? _TitleLayout(layout: page.layout)
+                ? _TitleLayout(api: api, layout: page.layout)
                 : _MemoriesLayout(api: api, layout: page.layout),
           ),
           if (showPageNumber)
@@ -65,17 +65,35 @@ class AlbumPageView extends StatelessWidget {
 }
 
 class _TitleLayout extends StatelessWidget {
-  const _TitleLayout({required this.layout});
+  const _TitleLayout({required this.api, required this.layout});
 
+  final ApiClient api;
   final Map<String, dynamic> layout;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final description = layout['description'] as String? ?? '';
+    final cover = layout['cover'] as Map<String, dynamic>?;
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
+        if (cover != null) ...[
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: ColoredBox(
+                color: const Color(0xFFEFE8D8),
+                child: AuthedImage(
+                  api: api,
+                  path: cover['display_url'] as String? ?? '',
+                  fit: BoxFit.contain,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: Insets.md),
+        ],
         Text(
           'MEMORY ALBUM',
           style: theme.textTheme.labelSmall?.copyWith(
@@ -145,7 +163,12 @@ Widget _photo(ApiClient api, Map<String, dynamic> entry,
       entry[thumbnail ? 'thumbnail_url' : 'display_url'] as String? ?? '';
   return ClipRRect(
     borderRadius: BorderRadius.circular(8),
-    child: SizedBox.expand(child: AuthedImage(api: api, path: path)),
+    child: ColoredBox(
+      color: const Color(0xFFEFE8D8),
+      child: SizedBox.expand(
+        child: AuthedImage(api: api, path: path, fit: BoxFit.contain),
+      ),
+    ),
   );
 }
 
