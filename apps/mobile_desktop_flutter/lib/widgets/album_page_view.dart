@@ -167,6 +167,13 @@ class _MemoriesLayout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Orientation-aware pages carry a `rows` structure whose frames already
+    // match each photo's shape.
+    final rows = layout['rows'] as List<dynamic>?;
+    if (rows != null && rows.isNotEmpty) {
+      return _MosaicLayout(api: api, rows: rows, palette: palette);
+    }
+    // Fallback for pages generated before orientation-aware layouts.
     final entries = [
       for (final item in layout['memories'] as List<dynamic>? ?? const [])
         item as Map<String, dynamic>,
@@ -189,6 +196,157 @@ class _MemoriesLayout extends StatelessWidget {
       return _PairLayout(api: api, entries: entries, palette: palette);
     }
     return _GridLayout(api: api, entries: entries, palette: palette);
+  }
+}
+
+/// Renders a page as stacked rows whose frames match photo orientation:
+/// a landscape is a full-width band, portraits pair side by side, and the two
+/// can mix on one page. Each frame uses the photo's real aspect ratio so it is
+/// filled edge to edge with no letterbox and no cropping.
+class _MosaicLayout extends StatelessWidget {
+  const _MosaicLayout({
+    required this.api,
+    required this.rows,
+    required this.palette,
+  });
+
+  final ApiClient api;
+  final List<dynamic> rows;
+  final ScrapbookPalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    var total = 0;
+    for (final row in rows) {
+      total += ((row as Map<String, dynamic>)['memories'] as List).length;
+    }
+    final solo = total == 1;
+    var runningIndex = 0;
+    final children = <Widget>[];
+    for (var r = 0; r < rows.length; r++) {
+      if (r > 0) children.add(const SizedBox(height: Insets.md));
+      final row = rows[r] as Map<String, dynamic>;
+      final memories = [
+        for (final m in row['memories'] as List<dynamic>)
+          m as Map<String, dynamic>,
+      ];
+      children.add(Expanded(
+        child: _MosaicRow(
+          api: api,
+          memories: memories,
+          palette: palette,
+          baseIndex: runningIndex,
+          solo: solo,
+        ),
+      ));
+      runningIndex += memories.length;
+    }
+    return Column(children: children);
+  }
+}
+
+class _MosaicRow extends StatelessWidget {
+  const _MosaicRow({
+    required this.api,
+    required this.memories,
+    required this.palette,
+    required this.baseIndex,
+    required this.solo,
+  });
+
+  final ApiClient api;
+  final List<Map<String, dynamic>> memories;
+  final ScrapbookPalette palette;
+  final int baseIndex;
+  final bool solo;
+
+  @override
+  Widget build(BuildContext context) {
+    if (memories.length == 1) {
+      return _MosaicCell(
+        api: api,
+        entry: memories.first,
+        index: baseIndex,
+        palette: palette,
+        solo: solo,
+      );
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < memories.length; i++) ...[
+          if (i > 0) const SizedBox(width: Insets.md),
+          Expanded(
+            child: _MosaicCell(
+              api: api,
+              entry: memories[i],
+              index: baseIndex + i,
+              palette: palette,
+              solo: false,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _MosaicCell extends StatelessWidget {
+  const _MosaicCell({
+    required this.api,
+    required this.entry,
+    required this.index,
+    required this.palette,
+    required this.solo,
+  });
+
+  final ApiClient api;
+  final Map<String, dynamic> entry;
+  final int index;
+  final ScrapbookPalette palette;
+  final bool solo;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final story = entry['story_preview'] as String? ?? '';
+    final ratio = (entry['aspect_ratio'] as num?)?.toDouble() ?? 1.0;
+    final caption = entry['caption'] as String? ?? '';
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Expanded(
+          child: Center(
+            child: AspectRatio(
+              aspectRatio: ratio <= 0 ? 1.0 : ratio,
+              child: _photo(api, entry, index, palette),
+            ),
+          ),
+        ),
+        if (caption.isNotEmpty) ...[
+          const SizedBox(height: Insets.sm),
+          Text(
+            caption,
+            style:
+                solo ? theme.textTheme.titleMedium : theme.textTheme.bodyMedium,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+        if (solo && story.isNotEmpty) ...[
+          const SizedBox(height: Insets.xs),
+          Text(
+            story,
+            style:
+                theme.textTheme.bodySmall?.copyWith(color: AppColors.softInk),
+            textAlign: TextAlign.center,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ],
+    );
   }
 }
 

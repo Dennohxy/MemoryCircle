@@ -17,9 +17,9 @@ def auth(token):
     return {"Authorization": f"Bearer {token}"}
 
 
-def image_file(color=(210, 140, 96), capture_date=None):
+def image_file(color=(210, 140, 96), capture_date=None, size=(900, 700)):
     stream = BytesIO()
-    image = Image.new("RGB", (900, 700), color)
+    image = Image.new("RGB", size, color)
     if capture_date:
         exif = image.getexif()
         exif[36867] = capture_date
@@ -765,3 +765,49 @@ def test_inactive_members_are_demoted_then_flagged(client):
     assert removed.status_code == 200, removed.text
     remaining = client.get(f"/circles/{circle_id}/members", headers=auth(owner)).json()
     assert all(m["user"]["email"] != "contributor@test.com" or m["status"] == "removed" for m in remaining)
+
+
+def _upload_and_approve(client, circle_id, owner, approver, color, size):
+    asset = client.post(
+        f"/circles/{circle_id}/assets/upload",
+        files={"file": ("p.jpg", image_file(color=color, size=size), "image/jpeg")},
+        headers=auth(owner),
+    ).json()
+    memory = client.post(
+        f"/circles/{circle_id}/memories",
+        json={"asset_id": asset["id"], "caption": "A moment", "approval_status": "pending"},
+        headers=auth(owner),
+    ).json()
+    approve_all_reviewers(client, circle_id, memory["id"], owner, approver)
+    return memory["id"]
+
+
+def test_album_pages_match_photo_orientation(client):
+    circle_id, owner, approver, _contributor, _viewer = setup_circle(client)
+    # One landscape (900x700) then two portraits (700x900), distinct colors so
+    # they are distinct assets.
+    land = _upload_and_approve(client, circle_id, owner, approver, (200, 100, 50), (900, 700))
+    port1 = _upload_and_approve(client, circle_id, owner, approver, (50, 200, 100), (700, 900))
+    port2 = _upload_and_approve(client, circle_id, owner, approver, (100, 50, 200), (700, 900))
+
+    album = client.post(f"/circles/{circle_id}/albums", json={"title": "Orientation"}, headers=auth(owner)).json()
+    client.patch(
+        f"/circles/{circle_id}/albums/{album['id']}",
+        json={"memory_sequence": [land, port1, port2]},
+        headers=auth(owner),
+    )
+    client.post(f"/circles/{circle_id}/albums/{album['id']}/pages/generate", headers=auth(owner))
+    pages = client.get(f"/circles/{circle_id}/albums/{album['id']}", headers=auth(owner)).json()["pages"]
+
+    # Page 0 is the title; the single content page mixes a landscape band over
+    # a portrait pair.
+    content = [p for p in pages if p["layout_json"].get("rows")]
+    assert len(content) == 1, "landscape + two portraits should fit one mixed page"
+    rows = content[0]["layout_json"]["rows"]
+    assert [r["kind"] for r in rows] == ["landscape", "portrait"]
+    assert rows[0]["memories"][0]["memory_id"] == land
+    assert rows[0]["memories"][0]["orientation"] == "landscape"
+    assert rows[0]["memories"][0]["aspect_ratio"] > 1.15
+    assert [m["memory_id"] for m in rows[1]["memories"]] == [port1, port2]
+    assert all(m["orientation"] == "portrait" for m in rows[1]["memories"])
+    assert all(m["aspect_ratio"] < 0.87 for m in rows[1]["memories"])

@@ -2030,24 +2030,77 @@ def patch_album(circle_id: int, album_id: int, payload: AlbumPatch, db: Session 
     return serialize_album(album, max_photo_count=cap)
 
 
+def memory_entry(memory: MemoryItem) -> dict:
+    """One photo's layout payload, including the orientation the client needs
+    to give it a matching frame instead of letterboxing it."""
+    asset = memory.asset
+    width = getattr(asset, "width", 0) or 0
+    height = getattr(asset, "height", 0) or 0
+    if width > 0 and height > 0:
+        # Clamp so a panorama or a very tall shot still gets a sane frame.
+        ratio = max(0.5, min(2.2, width / height))
+    else:
+        ratio = 1.0
+    if ratio >= 1.15:
+        orientation = "landscape"
+    elif ratio <= 0.87:
+        orientation = "portrait"
+    else:
+        orientation = "square"
+    return {
+        "memory_id": memory.id,
+        "asset_id": memory.asset_id,
+        "caption": memory.caption,
+        "story_preview": memory.story[:220],
+        "aspect_ratio": round(ratio, 4),
+        "orientation": orientation,
+        "display_url": f"/circles/{memory.circle_id}/assets/{memory.asset_id}/display",
+        "thumbnail_url": f"/circles/{memory.circle_id}/assets/{memory.asset_id}/thumbnail",
+    }
+
+
 def page_layout(page_number: int, memories: list[MemoryItem], template: str):
     return {
         "template": template,
         "page_number": page_number,
         "background": "#fff7ed",
         "image_fit": "contain",
-        "memories": [
-            {
-                "memory_id": memory.id,
-                "asset_id": memory.asset_id,
-                "caption": memory.caption,
-                "story_preview": memory.story[:220],
-                "display_url": f"/circles/{memory.circle_id}/assets/{memory.asset_id}/display",
-                "thumbnail_url": f"/circles/{memory.circle_id}/assets/{memory.asset_id}/thumbnail",
-            }
-            for memory in memories
-        ],
+        "memories": [memory_entry(memory) for memory in memories],
     }
+
+
+def compose_content_pages(memories: list[MemoryItem]) -> list[dict]:
+    """Groups photos into pages of orientation-matched frames, preserving the
+    given order. A page holds up to two rows: a landscape is a full-width band,
+    portraits pair side by side, and the two can mix on one page (a landscape
+    over a portrait pair)."""
+    entries = [memory_entry(memory) for memory in memories]
+    pages: list[dict] = []
+    index = 0
+    total = len(entries)
+    while index < total:
+        rows: list[dict] = []
+        count = 0
+        while index < total and len(rows) < 2 and count < 3:
+            entry = entries[index]
+            if entry["orientation"] == "landscape":
+                rows.append({"kind": "landscape", "memories": [entry]})
+                index += 1
+                count += 1
+            else:
+                pair = [entry]
+                index += 1
+                count += 1
+                if index < total and entries[index]["orientation"] != "landscape" and count < 3:
+                    pair.append(entries[index])
+                    index += 1
+                    count += 1
+                rows.append({"kind": "portrait", "memories": pair})
+                if len(pair) == 2:
+                    break
+        flat = [entry for row in rows for entry in row["memories"]]
+        pages.append({"rows": rows, "memories": flat})
+    return pages
 
 
 def ordered_album_memories(db: Session, circle_id: int, album: Album):
@@ -2090,18 +2143,19 @@ def rebuild_album_pages(db: Session, album: Album) -> list[AlbumPage]:
     db.add(title_page)
     pages.append(title_page)
     page_no += 1
-    index = 0
-    templates = [("one_photo_feature", 1), ("two_photo_story", 2)]
-    template_index = 0
-    while index < len(memories):
-        template, count = templates[template_index % len(templates)]
-        group = memories[index : index + count]
-        page = AlbumPage(album_id=album.id, page_number=page_no, layout_json=json.dumps(page_layout(page_no, group, template)), approval_status="approved")
+    for content in compose_content_pages(memories):
+        layout = {
+            "template": "mosaic",
+            "page_number": page_no,
+            "background": "#fff7ed",
+            "image_fit": "contain",
+            "rows": content["rows"],
+            "memories": content["memories"],
+        }
+        page = AlbumPage(album_id=album.id, page_number=page_no, layout_json=json.dumps(layout), approval_status="approved")
         db.add(page)
         pages.append(page)
         page_no += 1
-        index += len(group)
-        template_index += 1
     return pages
 
 

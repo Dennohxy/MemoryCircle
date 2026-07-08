@@ -91,6 +91,13 @@ to generated album pages, not proposals.
 - `POST /circles/{circle_id}/albums/{album_id}/retire/approve` (approve a pending removal)
 - `POST /circles/{circle_id}/albums/{album_id}/retire/cancel` (keep the album)
 - `POST /circles/{circle_id}/albums/{album_id}/pages/generate`
+
+Generated content pages are orientation-aware: each page's `layout_json`
+carries a `rows` structure (`kind` `landscape`/`portrait`) plus a flat
+`memories` list, and every memory includes `aspect_ratio` and `orientation`
+(from the stored photo dimensions). Landscapes become full-width bands and
+portraits pair side by side, so frames match photos instead of letterboxing
+them. Pages may mix a landscape band over a portrait pair.
 - `PATCH /circles/{circle_id}/albums/{album_id}/pages/{page_id}`
 
 Operations:
