@@ -76,9 +76,10 @@ def upload_memory(client, circle_id, token, status="draft"):
     return asset.json(), memory.json()
 
 
-def approve_all_members(client, circle_id, memory_id, owner, approver, contributor, viewer):
+def approve_all_reviewers(client, circle_id, memory_id, owner, approver):
+    """Owners and approvers form the voting group; all must approve."""
     last = None
-    for token in (owner, approver, contributor, viewer):
+    for token in (owner, approver):
         last = client.post(f"/circles/{circle_id}/memories/{memory_id}/approve", headers=auth(token))
         assert last.status_code == 200, last.text
     return last.json()
@@ -116,10 +117,13 @@ def test_asset_upload_thumbnail_and_memory_workflow(client):
     viewer_pending = client.get(f"/circles/{circle_id}/memories?status=pending", headers=auth(viewer))
     assert viewer_pending.status_code == 200
     assert len(viewer_pending.json()) == 1
+    blocked = client.post(f"/circles/{circle_id}/memories/{memory['id']}/approve", headers=auth(contributor))
+    assert blocked.status_code == 403
     approved = client.post(f"/circles/{circle_id}/memories/{memory['id']}/approve", headers=auth(approver))
     assert approved.json()["approval_status"] == "pending"
-    assert approved.json()["approval"]["approvals_have"] == 2
-    approved = approve_all_members(client, circle_id, memory["id"], owner, approver, contributor, viewer)
+    assert approved.json()["approval"]["approvals_have"] == 1
+    assert approved.json()["approval"]["approvals_needed"] == 2
+    approved = approve_all_reviewers(client, circle_id, memory["id"], owner, approver)
     assert approved["approval_status"] == "approved"
     visible = client.get(f"/circles/{circle_id}/memories", headers=auth(viewer))
     assert len(visible.json()) == 1
@@ -139,25 +143,29 @@ def test_unapproved_photos_can_be_sent_for_circle_approval_with_notifications(cl
         "/me/notification-subscriptions",
         json={
             "provider": "local",
-            "endpoint": "test-device-viewer",
-            "device_label": "Viewer test device",
+            "endpoint": "test-device-approver",
+            "device_label": "Approver test device",
         },
-        headers=auth(viewer),
+        headers=auth(approver),
     )
     assert subscription.status_code == 200, subscription.text
 
     sent = client.post(f"/circles/{circle_id}/photos/send-for-approval", headers=auth(owner))
     assert sent.status_code == 200, sent.text
     assert sent.json()["sent"] == 1
-    assert sent.json()["notifications_queued"] == 4
+    # Only the voting group (owner + approver) is asked to approve.
+    assert sent.json()["notifications_queued"] == 2
 
     pending = client.get(f"/circles/{circle_id}/memories?status=pending", headers=auth(viewer)).json()
     assert pending[0]["id"] == memory["id"]
 
-    notifications = client.get("/me/notifications", headers=auth(viewer))
+    notifications = client.get("/me/notifications", headers=auth(approver))
     assert notifications.status_code == 200, notifications.text
     assert notifications.json()[0]["type"] == "photo_approval_needed"
     assert notifications.json()[0]["target_id"] == memory["id"]
+
+    viewer_notifications = client.get("/me/notifications", headers=auth(viewer))
+    assert viewer_notifications.json() == []
 
 
 def test_photo_source_date_is_used_for_memory_and_album_order(client):
@@ -182,7 +190,7 @@ def test_photo_source_date_is_used_for_memory_and_album_order(client):
         )
         assert memory.status_code == 200, memory.text
         assert memory.json()["memory_date"].startswith(capture_date[:4].replace(":", "-"))
-        approve_all_members(client, circle_id, memory.json()["id"], owner, approver, contributor, viewer)
+        approve_all_reviewers(client, circle_id, memory.json()["id"], owner, approver)
         memory_ids.append(memory.json()["id"])
 
     album = client.post(
@@ -211,7 +219,7 @@ def test_album_page_generation_and_flip_payload(client):
     circle_id, owner, approver, contributor, viewer = setup_circle(client)
     for index in range(5):
         _asset, memory = upload_memory(client, circle_id, contributor, status="pending")
-        approve_all_members(client, circle_id, memory["id"], owner, approver, contributor, viewer)
+        approve_all_reviewers(client, circle_id, memory["id"], owner, approver)
     album = client.post(
         f"/circles/{circle_id}/albums",
         json={"title": "Family Highlights", "target_photo_count": 4},
@@ -227,10 +235,46 @@ def test_album_page_generation_and_flip_payload(client):
     assert fetched.json()["target_photo_count"] == 4
 
 
+def test_album_size_is_capped_at_twelve_per_member(client):
+    circle_id, owner, _approver, _contributor, _viewer = setup_circle(client)
+    # Four active members, so the family maximum is 48 photos.
+    too_big = client.post(
+        f"/circles/{circle_id}/albums",
+        json={"title": "Oversized", "target_photo_count": 49},
+        headers=auth(owner),
+    )
+    assert too_big.status_code == 400
+    assert "12 photos per member" in too_big.json()["detail"]
+
+    album = client.post(
+        f"/circles/{circle_id}/albums",
+        json={"title": "Family Maximum"},
+        headers=auth(owner),
+    )
+    assert album.status_code == 200, album.text
+    assert album.json()["target_photo_count"] == 48
+    assert album.json()["max_photo_count"] == 48
+
+    over_patch = client.patch(
+        f"/circles/{circle_id}/albums/{album.json()['id']}",
+        json={"target_photo_count": 100},
+        headers=auth(owner),
+    )
+    assert over_patch.status_code == 400
+
+    ok_patch = client.patch(
+        f"/circles/{circle_id}/albums/{album.json()['id']}",
+        json={"target_photo_count": 12},
+        headers=auth(owner),
+    )
+    assert ok_patch.status_code == 200, ok_patch.text
+    assert ok_patch.json()["target_photo_count"] == 12
+
+
 def create_album_with_pages(client, circle_id, owner, approver, contributor):
     _asset, memory = upload_memory(client, circle_id, contributor, status="pending")
     viewer = client.post("/auth/login", json={"email": "viewer@test.com", "password": "ChangeMe123!"}).json()["token"]
-    approve_all_members(client, circle_id, memory["id"], owner, approver, contributor, viewer)
+    approve_all_reviewers(client, circle_id, memory["id"], owner, approver)
     album = client.post(
         f"/circles/{circle_id}/albums",
         json={"title": "Family Highlights"},
@@ -396,7 +440,7 @@ def test_asset_responses_are_cacheable(client):
 def test_album_edit_permissions(client):
     circle_id, owner, approver, contributor, viewer = setup_circle(client)
     _, memory = upload_memory(client, circle_id, owner, status="pending")
-    approve_all_members(client, circle_id, memory["id"], owner, approver, contributor, viewer)
+    approve_all_reviewers(client, circle_id, memory["id"], owner, approver)
     album = client.post(
         f"/circles/{circle_id}/albums",
         json={"title": "First Title", "description": "First note"},

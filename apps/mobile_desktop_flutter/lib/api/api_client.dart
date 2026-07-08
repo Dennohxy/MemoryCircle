@@ -465,12 +465,12 @@ class ApiClient {
     int circleId, {
     required String title,
     String description = '',
-    int targetPhotoCount = 24,
+    int? targetPhotoCount,
   }) async =>
       Album.fromJson(await _post('/circles/$circleId/albums', {
         'title': title,
         'description': description,
-        'target_photo_count': targetPhotoCount,
+        if (targetPhotoCount != null) 'target_photo_count': targetPhotoCount,
       }) as Map<String, dynamic>);
 
   Future<void> generateAlbumPages(int circleId, int albumId) async =>

@@ -126,7 +126,8 @@ class Album(Base):
     title: Mapped[str] = mapped_column(String(220))
     description: Mapped[str] = mapped_column(Text, default="")
     template_key: Mapped[str] = mapped_column(String(100), default="classic")
-    target_photo_count: Mapped[int] = mapped_column(Integer, default=24)
+    # None means "use the family maximum" (12 photos per active member).
+    target_photo_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     cover_memory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("memory_items.id"), nullable=True)
     memory_sequence_json: Mapped[str] = mapped_column(Text, default="[]")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))

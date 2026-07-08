@@ -3,6 +3,68 @@
 Use this log for short handoffs between human maintainers, Codex, and Claude.
 Newest entry goes at the top.
 
+## 2026-07-08 - Claude
+
+Branch: `feature/album-edit-and-add-photos`
+
+Owner: Claude
+
+Intent: Apply the founder's decisions on Codex's open questions and land the
+pre-30-day feature set. Founder decisions (2026-07-08):
+
+1. Album size: no limit on proposals; album maximum and default is
+   **12 photos x active circle members**, computed dynamically.
+2. Photo approval voting group: **owners + approvers only** (viewers and
+   contributors do not vote and cannot stall albums).
+3. Cover/sequence stays reviewer-only, as Codex built it.
+
+Files/areas touched:
+
+- `backend/api/app/main.py` - `approval_member_ids()` (reviewer voting
+  group), `album_photo_cap()` (12 x members), cap validation on album
+  create/patch, effective target + `max_photo_count` in `serialize_album`,
+  non-reviewer votes no longer recorded, approve endpoint now 403s
+  non-reviewers.
+- `backend/api/app/models.py` - `Album.target_photo_count` nullable
+  (NULL = family maximum).
+- `backend/api/tests/test_mvp.py` - reviewer-only consensus tests, new
+  12-per-member cap test.
+- Flutter: `photos_screen.dart` (reviewer wording, approve button hidden
+  from non-reviewers), `albums_screen.dart` (optional photo count with
+  family-maximum helper), `models.dart` / `api_client.dart`
+  (`max_photo_count`), `app_shell.dart` (role passed to PhotosView).
+- Docs: `ALBUM_PHOTO_COUNT_PLAN.md` (decision recorded), `API.md`.
+
+Committed Codex's 2026-07-08 feature work first (commit
+"Add all-photos view, consensus approval, cover/order controls, face-safe
+layouts") so authorship stays traceable, EXCLUDING the in-flight FCM client
+wiring (`firebase.json`, `lib/firebase_options.dart`,
+`lib/app/push_notifications.dart`, `web/firebase-messaging-sw.js`,
+`docs/PUSH_NOTIFICATIONS.md`, `pubspec.yaml`/`.lock`,
+`lib/app/memory_circle_app.dart`) - Codex was actively editing those while
+this work happened. Codex: commit your Firebase work on top when ready.
+
+Checks run:
+
+- `.venv/bin/python -m pytest` from `backend/api` (18 passed)
+- `python3 -m py_compile app/main.py app/models.py app/seed.py`
+- `dart format lib`
+- `flutter analyze` (no issues)
+
+Known risks:
+
+- Existing databases keep any stored `target_photo_count` (e.g. 24 from the
+  earlier default); the 12-per-member cap is enforced at generation time via
+  `min(target, cap)`.
+- `voter_ids` recorded before this change may include non-reviewers; the
+  unanimity check and progress counts handle this correctly.
+- Not pushed: `scripts/repo_publish.sh` requires a clean tree and Codex's
+  Firebase work is still uncommitted.
+
+Next recommended step:
+
+- Codex finishes and commits FCM wiring, then publish the branch.
+
 ## 2026-07-08 - Codex
 
 Branch: `feature/album-edit-and-add-photos`

@@ -86,7 +86,7 @@ def ensure_album_removal_columns():
         "status": "VARCHAR(40) DEFAULT 'active'",
         "removal_requested_by": "INTEGER",
         "removal_votes_json": "TEXT DEFAULT '[]'",
-        "target_photo_count": "INTEGER DEFAULT 24",
+        "target_photo_count": "INTEGER",
         "cover_memory_id": "INTEGER",
         "memory_sequence_json": "TEXT DEFAULT '[]'",
     }
@@ -181,7 +181,8 @@ class AlbumIn(BaseModel):
     title: str
     description: str = ""
     template_key: str = "classic"
-    target_photo_count: int = 24
+    # None means "use the family maximum" (12 photos per active member).
+    target_photo_count: Optional[int] = None
     cover_memory_id: Optional[int] = None
     memory_sequence: list[int] = []
 
@@ -341,16 +342,27 @@ def serialize_memory(memory: MemoryItem, approvals_needed: Optional[int] = None)
     }
 
 
-def serialize_album(album: Album, pages: Optional[list[AlbumPage]] = None, approvals_needed: Optional[int] = None):
+def serialize_album(
+    album: Album,
+    pages: Optional[list[AlbumPage]] = None,
+    approvals_needed: Optional[int] = None,
+    max_photo_count: Optional[int] = None,
+):
     status = getattr(album, "status", None) or "active"
     votes = json.loads(getattr(album, "removal_votes_json", None) or "[]")
+    stored_target = getattr(album, "target_photo_count", None)
+    if max_photo_count is not None:
+        effective_target = min(stored_target or max_photo_count, max_photo_count)
+    else:
+        effective_target = stored_target
     data = {
         "id": album.id,
         "circle_id": album.circle_id,
         "title": album.title,
         "description": album.description,
         "template_key": album.template_key,
-        "target_photo_count": getattr(album, "target_photo_count", None) or 24,
+        "target_photo_count": effective_target,
+        "max_photo_count": max_photo_count,
         "cover_memory_id": getattr(album, "cover_memory_id", None),
         "memory_sequence": json.loads(getattr(album, "memory_sequence_json", None) or "[]"),
         "created_by": album.created_by,
@@ -500,18 +512,31 @@ def image_capture_date(image: Image.Image) -> Optional[datetime]:
     return None
 
 
-def active_member_ids(db: Session, circle_id: int) -> list[int]:
-    members = db.scalars(
-        select(CircleMember).where(
-            CircleMember.circle_id == circle_id,
-            CircleMember.status == "active",
-        )
-    ).all()
-    return sorted(member.user_id for member in members)
+def active_member_ids(db: Session, circle_id: int, roles: Optional[set[str]] = None) -> list[int]:
+    query = select(CircleMember).where(
+        CircleMember.circle_id == circle_id,
+        CircleMember.status == "active",
+    )
+    if roles is not None:
+        query = query.where(CircleMember.role.in_(roles))
+    return sorted(member.user_id for member in db.scalars(query).all())
+
+
+def approval_member_ids(db: Session, circle_id: int) -> list[int]:
+    """Owners and approvers form the photo approval voting group."""
+    return active_member_ids(db, circle_id, APPROVE_ROLES)
+
+
+PHOTOS_PER_MEMBER = 12
+
+
+def album_photo_cap(db: Session, circle_id: int) -> int:
+    """Album size limit: 12 photos for every active circle member."""
+    return PHOTOS_PER_MEMBER * max(1, len(active_member_ids(db, circle_id)))
 
 
 def approval_progress(db: Session, memory: MemoryItem):
-    needed_ids = active_member_ids(db, memory.circle_id)
+    needed_ids = approval_member_ids(db, memory.circle_id)
     votes = sorted(set(json.loads(getattr(memory, "approval_votes_json", None) or "[]")))
     return {
         "approvals_have": len(set(votes).intersection(needed_ids)),
@@ -521,9 +546,12 @@ def approval_progress(db: Session, memory: MemoryItem):
 
 
 def apply_memory_vote(db: Session, memory: MemoryItem, user_id: int):
-    needed_ids = set(active_member_ids(db, memory.circle_id))
+    needed_ids = set(approval_member_ids(db, memory.circle_id))
     votes = set(json.loads(getattr(memory, "approval_votes_json", None) or "[]"))
-    votes.add(user_id)
+    # Only voting-group members (owners and approvers) cast counted votes;
+    # a contributor submitting their own memory is not an approval.
+    if user_id in needed_ids:
+        votes.add(user_id)
     memory.approval_votes_json = json.dumps(sorted(votes))
     if needed_ids and needed_ids.issubset(votes):
         memory.approval_status = "approved"
@@ -574,7 +602,7 @@ def queue_notification(
 def queue_approval_notifications(db: Session, memory: MemoryItem):
     votes = set(json.loads(getattr(memory, "approval_votes_json", None) or "[]"))
     queued = 0
-    for user_id in active_member_ids(db, memory.circle_id):
+    for user_id in approval_member_ids(db, memory.circle_id):
         if user_id in votes:
             continue
         queue_notification(
@@ -915,7 +943,7 @@ def list_uploaded_photos(circle_id: int, db: Session = Depends(get_db), user: Us
     assets = db.scalars(select(PhotoAsset).where(PhotoAsset.circle_id == circle_id).order_by(PhotoAsset.created_at.desc())).all()
     memories = db.scalars(select(MemoryItem).where(MemoryItem.circle_id == circle_id)).all()
     memory_by_asset = {memory.asset_id: memory for memory in memories}
-    approvals_needed = len(active_member_ids(db, circle_id))
+    approvals_needed = len(approval_member_ids(db, circle_id))
     return [
         serialize_uploaded_photo(asset, memory_by_asset.get(asset.id), approvals_needed=approvals_needed)
         for asset in assets
@@ -1028,7 +1056,7 @@ def create_memory(circle_id: int, payload: MemoryIn, db: Session = Depends(get_d
     log_activity(db, circle_id, user.id, "memory.created", "memory", memory.id, {"status": status})
     db.commit()
     db.refresh(memory)
-    return serialize_memory(memory, approvals_needed=len(active_member_ids(db, circle_id)))
+    return serialize_memory(memory, approvals_needed=len(approval_member_ids(db, circle_id)))
 
 
 @app.get("/circles/{circle_id}/memories")
@@ -1045,7 +1073,7 @@ def list_memories(circle_id: int, status: Optional[str] = None, db: Session = De
     elif status:
         query = query.where(MemoryItem.approval_status == status)
     query = query.order_by(MemoryItem.memory_date.asc().nulls_last(), MemoryItem.created_at.asc())
-    approvals_needed = len(active_member_ids(db, circle_id))
+    approvals_needed = len(approval_member_ids(db, circle_id))
     return [serialize_memory(memory, approvals_needed=approvals_needed) for memory in db.scalars(query).all()]
 
 
@@ -1057,7 +1085,7 @@ def get_memory(circle_id: int, memory_id: int, db: Session = Depends(get_db), us
         raise HTTPException(status_code=404, detail="Memory not found")
     if member.role == "viewer" and memory.approval_status not in {"approved", "pending"}:
         raise HTTPException(status_code=403, detail="Viewers can only see approved memories and memories waiting for approval")
-    return serialize_memory(memory, approvals_needed=len(active_member_ids(db, circle_id)))
+    return serialize_memory(memory, approvals_needed=len(approval_member_ids(db, circle_id)))
 
 
 @app.patch("/circles/{circle_id}/memories/{memory_id}")
@@ -1072,7 +1100,7 @@ def patch_memory(circle_id: int, memory_id: int, payload: MemoryPatch, db: Sessi
         setattr(memory, field, json.dumps(value) if field == "people_json" else value)
     log_activity(db, circle_id, user.id, "memory.updated", "memory", memory_id, payload.model_dump(exclude_unset=True))
     db.commit()
-    return serialize_memory(memory, approvals_needed=len(active_member_ids(db, circle_id)))
+    return serialize_memory(memory, approvals_needed=len(approval_member_ids(db, circle_id)))
 
 
 @app.post("/circles/{circle_id}/memories/{memory_id}/submit")
@@ -1087,7 +1115,7 @@ def submit_memory(circle_id: int, memory_id: int, db: Session = Depends(get_db),
     queue_approval_notifications(db, memory)
     log_activity(db, circle_id, user.id, "memory.submitted", "memory", memory_id)
     db.commit()
-    return serialize_memory(memory, approvals_needed=len(active_member_ids(db, circle_id)))
+    return serialize_memory(memory, approvals_needed=len(approval_member_ids(db, circle_id)))
 
 
 def approval_action(circle_id: int, memory_id: int, status: str, action: str, db: Session, user: User, patch: Optional[MemoryPatch] = None):
@@ -1095,8 +1123,8 @@ def approval_action(circle_id: int, memory_id: int, status: str, action: str, db
     memory = db.get(MemoryItem, memory_id)
     if not memory or memory.circle_id != circle_id:
         raise HTTPException(status_code=404, detail="Memory not found")
-    if status != "approved" and member.role not in APPROVE_ROLES:
-        raise HTTPException(status_code=403, detail="Only reviewers can reject or request changes")
+    if member.role not in APPROVE_ROLES:
+        raise HTTPException(status_code=403, detail="Only reviewers can approve, reject, or request changes")
     if patch:
         if member.role not in APPROVE_ROLES:
             raise HTTPException(status_code=403, detail="Only reviewers can edit memories during approval")
@@ -1111,7 +1139,7 @@ def approval_action(circle_id: int, memory_id: int, status: str, action: str, db
         memory.approval_status = status
     log_activity(db, circle_id, user.id, action, "memory", memory_id, {"status": status})
     db.commit()
-    return serialize_memory(memory, approvals_needed=len(active_member_ids(db, circle_id)))
+    return serialize_memory(memory, approvals_needed=len(approval_member_ids(db, circle_id)))
 
 
 @app.post("/circles/{circle_id}/memories/{memory_id}/approve")
@@ -1132,8 +1160,12 @@ def request_changes(circle_id: int, memory_id: int, db: Session = Depends(get_db
 @app.post("/circles/{circle_id}/albums")
 def create_album(circle_id: int, payload: AlbumIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     require_member(db, circle_id, user, APPROVE_ROLES)
-    if payload.target_photo_count < 1 or payload.target_photo_count > 200:
-        raise HTTPException(status_code=400, detail="Choose an album size between 1 and 200 photos")
+    cap = album_photo_cap(db, circle_id)
+    if payload.target_photo_count is not None and not 1 <= payload.target_photo_count <= cap:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Album size can be at most {PHOTOS_PER_MEMBER} photos per member (currently {cap})",
+        )
     album = Album(
         circle_id=circle_id,
         title=payload.title,
@@ -1149,7 +1181,7 @@ def create_album(circle_id: int, payload: AlbumIn, db: Session = Depends(get_db)
     log_activity(db, circle_id, user.id, "album.created", "album", album.id, {"title": album.title})
     db.commit()
     db.refresh(album)
-    return serialize_album(album)
+    return serialize_album(album, max_photo_count=cap)
 
 
 @app.get("/circles/{circle_id}/albums")
@@ -1157,7 +1189,8 @@ def list_albums(circle_id: int, db: Session = Depends(get_db), user: User = Depe
     require_member(db, circle_id, user)
     albums = db.scalars(select(Album).where(Album.circle_id == circle_id).order_by(Album.created_at.desc())).all()
     approvals_needed = len(album_manager_ids(db, circle_id))
-    return [serialize_album(album, approvals_needed=approvals_needed) for album in albums]
+    cap = album_photo_cap(db, circle_id)
+    return [serialize_album(album, approvals_needed=approvals_needed, max_photo_count=cap) for album in albums]
 
 
 @app.get("/circles/{circle_id}/albums/{album_id}")
@@ -1168,7 +1201,7 @@ def get_album(circle_id: int, album_id: int, db: Session = Depends(get_db), user
         raise HTTPException(status_code=404, detail="Album not found")
     approvals_needed = len(album_manager_ids(db, circle_id))
     pages = db.scalars(select(AlbumPage).where(AlbumPage.album_id == album_id).order_by(AlbumPage.page_number)).all()
-    return serialize_album(album, pages, approvals_needed=approvals_needed)
+    return serialize_album(album, pages, approvals_needed=approvals_needed, max_photo_count=album_photo_cap(db, circle_id))
 
 
 def album_manager_ids(db: Session, circle_id: int) -> list[int]:
@@ -1382,9 +1415,13 @@ def patch_album(circle_id: int, album_id: int, payload: AlbumPatch, db: Session 
     if not album or album.circle_id != circle_id:
         raise HTTPException(status_code=404, detail="Album not found")
     changes = payload.model_dump(exclude_unset=True)
+    cap = album_photo_cap(db, circle_id)
     if "target_photo_count" in changes and changes["target_photo_count"] is not None:
-        if changes["target_photo_count"] < 1 or changes["target_photo_count"] > 200:
-            raise HTTPException(status_code=400, detail="Choose an album size between 1 and 200 photos")
+        if not 1 <= changes["target_photo_count"] <= cap:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Album size can be at most {PHOTOS_PER_MEMBER} photos per member (currently {cap})",
+            )
     if payload.cover_memory_id is not None:
         cover = db.get(MemoryItem, payload.cover_memory_id)
         if not cover or cover.circle_id != circle_id or cover.approval_status != "approved":
@@ -1408,7 +1445,7 @@ def patch_album(circle_id: int, album_id: int, payload: AlbumPatch, db: Session 
     log_activity(db, circle_id, user.id, "album.updated", "album", album_id, changes)
     db.commit()
     db.refresh(album)
-    return serialize_album(album)
+    return serialize_album(album, max_photo_count=cap)
 
 
 def page_layout(page_number: int, memories: list[MemoryItem], template: str):
@@ -1449,7 +1486,9 @@ def ordered_album_memories(db: Session, circle_id: int, album: Album):
         )
     )
     ordered.extend(remaining)
-    target = getattr(album, "target_photo_count", None) or 24
+    cap = album_photo_cap(db, circle_id)
+    # The cap still holds if members left after an explicit target was set.
+    target = min(getattr(album, "target_photo_count", None) or cap, cap)
     return ordered[:target]
 
 

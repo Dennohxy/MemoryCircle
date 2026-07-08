@@ -38,11 +38,13 @@ Assets and memories:
 - `POST /circles/{circle_id}/memories/{memory_id}/reject`
 - `POST /circles/{circle_id}/memories/{memory_id}/request-changes`
 
-Photo approval is consensus-based. A submitted memory stays `pending` until
-every active circle member has approved it. The approve endpoint records the
-current member's approval vote; it does not let the owner or reviewer override
-the rest of the circle. Memory responses include an `approval` object with
-`approvals_have`, `approvals_needed`, and `voter_ids`.
+Photo approval is consensus-based among reviewers. A submitted memory stays
+`pending` until every active owner and approver has approved it (founder
+decision 2026-07-08: contributors and viewers do not vote, so a passive member
+cannot stall an album). The approve endpoint records the current reviewer's
+vote; no single reviewer, including the owner, can override the rest. Memory
+responses include an `approval` object with `approvals_have`,
+`approvals_needed`, and `voter_ids`.
 
 When an uploaded image has a source capture date in image metadata, the backend
 stores it on the asset and uses it as the memory date if the contributor did
@@ -50,13 +52,20 @@ not enter a date. Album generation uses manual `memory_sequence` first; without
 manual order, memories are ordered by memory/source date before approval time.
 
 Approval notifications are queued as `photo_approval_needed` notifications for
-members who have not yet approved a pending memory. The current implementation
+reviewers who have not yet approved a pending memory. The current implementation
 stores notification subscriptions and notification records; mobile/web push
 providers can deliver from that queue.
 
 Albums:
 
 - `POST /circles/{circle_id}/albums` (supports `target_photo_count`, `cover_memory_id`, and `memory_sequence`)
+
+Album size is capped at 12 photos per active circle member. Omitting
+`target_photo_count` uses that family maximum; anything above it is rejected.
+Album responses carry both `target_photo_count` (effective) and
+`max_photo_count` (the ceiling). Uploads are never limited — the cap applies
+to generated album pages, not proposals.
+
 - `GET /circles/{circle_id}/albums`
 - `GET /circles/{circle_id}/albums/{album_id}`
 - `PATCH /circles/{circle_id}/albums/{album_id}` (title, description, target count, cover, sequence; owner or reviewer)

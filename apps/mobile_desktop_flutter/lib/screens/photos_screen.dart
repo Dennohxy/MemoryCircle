@@ -13,10 +13,12 @@ class PhotosView extends StatefulWidget {
     super.key,
     required this.api,
     required this.circle,
+    required this.role,
   });
 
   final ApiClient api;
   final Circle circle;
+  final CircleRole role;
 
   @override
   State<PhotosView> createState() => _PhotosViewState();
@@ -41,7 +43,7 @@ class _PhotosViewState extends State<PhotosView> {
       _refresh();
       messenger.showSnackBar(SnackBar(
         content: Text(updated.approvalStatus == 'approved'
-            ? 'Everyone has approved this photo. It can enter the album.'
+            ? 'All reviewers have approved this photo. It can enter the album.'
             : 'Your approval was recorded.'),
       ));
     } on ApiException catch (error) {
@@ -135,6 +137,7 @@ class _PhotosViewState extends State<PhotosView> {
                       api: widget.api,
                       photo: photos[index],
                       currentUserId: widget.api.currentUser?.id,
+                      canReview: widget.role.canReview,
                       busy: _busy,
                       onApprove: _approve,
                     ),
@@ -154,6 +157,7 @@ class _PhotoTile extends StatelessWidget {
     required this.api,
     required this.photo,
     required this.currentUserId,
+    required this.canReview,
     required this.busy,
     required this.onApprove,
   });
@@ -161,6 +165,7 @@ class _PhotoTile extends StatelessWidget {
   final ApiClient api;
   final UploadedPhoto photo;
   final int? currentUserId;
+  final bool canReview;
   final bool busy;
   final ValueChanged<Memory> onApprove;
 
@@ -169,7 +174,8 @@ class _PhotoTile extends StatelessWidget {
     final theme = Theme.of(context);
     final memory = photo.memory;
     final status = memory?.approvalStatus ?? 'uploaded';
-    final canApprove = memory != null &&
+    final canApprove = canReview &&
+        memory != null &&
         status == 'pending' &&
         !memory.approval.hasVoted(currentUserId);
     return Material(
@@ -233,7 +239,7 @@ class _PhotoTile extends StatelessWidget {
     if (memory == null) return 'Uploaded, not sent for album review yet';
     if (status == 'approved') return 'Approved for album';
     if (status == 'pending') {
-      return 'Waiting for family approval: ${memory.approval.approvalsHave} of ${memory.approval.approvalsNeeded}';
+      return 'Waiting for reviewer approval: ${memory.approval.approvalsHave} of ${memory.approval.approvalsNeeded}';
     }
     if (status == 'changes_requested') return 'Changes requested';
     if (status == 'rejected') return 'Not included';

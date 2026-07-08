@@ -311,7 +311,8 @@ class Album {
     required this.id,
     required this.title,
     required this.description,
-    this.targetPhotoCount = 24,
+    this.targetPhotoCount = 0,
+    this.maxPhotoCount,
     this.coverMemoryId,
     this.memorySequence = const [],
     this.status = 'active',
@@ -323,7 +324,11 @@ class Album {
         id: _asInt(json['id']),
         title: _asText(json['title']),
         description: _asText(json['description']),
-        targetPhotoCount: _asInt(json['target_photo_count'] ?? 24),
+        targetPhotoCount:
+            _asInt(json['target_photo_count'] ?? json['max_photo_count'] ?? 0),
+        maxPhotoCount: json['max_photo_count'] == null
+            ? null
+            : _asInt(json['max_photo_count']),
         coverMemoryId: json['cover_memory_id'] == null
             ? null
             : _asInt(json['cover_memory_id']),
@@ -349,7 +354,12 @@ class Album {
   final int id;
   final String title;
   final String description;
+
+  /// Effective album size; the family maximum (12 per member) when unset.
   final int targetPhotoCount;
+
+  /// Album size ceiling: 12 photos per active circle member.
+  final int? maxPhotoCount;
   final int? coverMemoryId;
   final List<int> memorySequence;
   final String status;

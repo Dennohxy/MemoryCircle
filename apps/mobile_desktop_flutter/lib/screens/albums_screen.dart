@@ -47,7 +47,7 @@ class _AlbumsViewState extends State<AlbumsView> {
 
   Future<void> _createAlbum() async {
     final input = await showDialog<
-        ({String title, String description, int targetPhotoCount})>(
+        ({String title, String description, int? targetPhotoCount})>(
       context: context,
       builder: (_) => const _CreateAlbumDialog(),
     );
@@ -106,7 +106,7 @@ class _AlbumsViewState extends State<AlbumsView> {
 
   Future<void> _renameAlbum(Album album) async {
     final input = await showDialog<
-        ({String title, String description, int targetPhotoCount})>(
+        ({String title, String description, int? targetPhotoCount})>(
       context: context,
       builder: (_) => _EditAlbumDialog(album: album),
     );
@@ -1052,7 +1052,10 @@ class _EditAlbumDialogState extends State<_EditAlbumDialog> {
               keyboardType: TextInputType.number,
               decoration: appInput(
                 'Planned number of photos',
-                helper: 'Used when pages are generated.',
+                helper: widget.album.maxPhotoCount == null
+                    ? 'Used when pages are generated.'
+                    : 'Family maximum: ${widget.album.maxPhotoCount} photos '
+                        '(12 per member).',
               ),
             ),
           ],
@@ -1069,7 +1072,7 @@ class _EditAlbumDialogState extends State<_EditAlbumDialog> {
                     title: _titleController.text.trim(),
                     description: _descriptionController.text.trim(),
                     targetPhotoCount:
-                        int.tryParse(_targetController.text.trim()) ?? 24,
+                        int.tryParse(_targetController.text.trim()),
                   ))
               : null,
           child: const Text('Save changes'),
@@ -1089,7 +1092,7 @@ class _CreateAlbumDialog extends StatefulWidget {
 class _CreateAlbumDialogState extends State<_CreateAlbumDialog> {
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
-  final _targetController = TextEditingController(text: '24');
+  final _targetController = TextEditingController();
 
   @override
   void initState() {
@@ -1141,8 +1144,9 @@ class _CreateAlbumDialogState extends State<_CreateAlbumDialog> {
               controller: _targetController,
               keyboardType: TextInputType.number,
               decoration: appInput(
-                'Planned number of photos',
-                helper: 'You can adjust this after the group agrees.',
+                'Planned number of photos (optional)',
+                helper:
+                    'Leave empty for the family maximum: 12 photos per member.',
               ),
             ),
           ],
@@ -1159,7 +1163,7 @@ class _CreateAlbumDialogState extends State<_CreateAlbumDialog> {
                     title: _titleController.text.trim(),
                     description: _descriptionController.text.trim(),
                     targetPhotoCount:
-                        int.tryParse(_targetController.text.trim()) ?? 24,
+                        int.tryParse(_targetController.text.trim()),
                   ))
               : null,
           child: const Text('Create album'),

@@ -1,27 +1,19 @@
 # Album Photo Count Plan
 
-This plan is for approval before Memory Circle treats any album size as the
-product default.
+## Approved Decision (founder, 2026-07-08)
 
-## Recommendation
+The album size scales with the family, instead of a fixed default:
 
-Use a default album target of **24 photos**.
+- **Maximum album size = 12 photos x number of active circle members.**
+- Members are never limited in how many photos they can *propose* (upload).
+- Reviewers may set a smaller per-album target; anything above the family
+  maximum is rejected with a clear message.
+- When no target is set, page generation uses the family maximum.
+- If members leave after a target was set, the cap still holds at generation
+  time (`min(target, 12 x members)`).
 
-Why:
-
-- It is large enough to feel complete for a family event.
-- It stays short enough for a comfortable flip-through session.
-- It creates predictable page generation without forcing dense collages.
-- It supports face-safe layouts with one or two photos per page.
-
-## Proposed Presets
-
-```text
-Small keepsake      12 photos
-Standard album      24 photos
-Big family event    36 photos
-Archive edition     60 photos
-```
+The API exposes both values on every album: `target_photo_count` (effective)
+and `max_photo_count` (the 12-per-member ceiling).
 
 ## Page Layout Rule
 
@@ -38,19 +30,10 @@ photo remains visible. Empty margins are acceptable if that protects faces.
 
 Before page generation:
 
-1. Members upload all candidate photos.
-2. Every active circle member approves each photo that may enter the album.
-3. A reviewer sets the planned photo count.
+1. Members upload all candidate photos (no upload limit).
+2. Every reviewer (owner + approvers) approves each photo that may enter the
+   album. Founder decision 2026-07-08: viewers and contributors do not vote,
+   so a passive member cannot stall an album.
+3. A reviewer optionally sets a planned photo count within the family maximum.
 4. A reviewer chooses the cover photo and sequence.
 5. Pages are generated from approved photos only.
-
-## Open Decision
-
-Approve one default:
-
-```text
-[ ] 12 photos
-[ ] 24 photos
-[ ] 36 photos
-[ ] Custom default: ______
-```

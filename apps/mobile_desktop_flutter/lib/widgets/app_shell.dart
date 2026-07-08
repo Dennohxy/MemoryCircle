@@ -155,7 +155,8 @@ class _CircleShellState extends State<CircleShell> {
             circle: _circle,
             role: role,
           ),
-        CircleSection.photos => PhotosView(api: widget.api, circle: _circle),
+        CircleSection.photos =>
+          PhotosView(api: widget.api, circle: _circle, role: role),
         CircleSection.review =>
           MemoriesReviewView(api: widget.api, circle: _circle),
         CircleSection.albums =>
