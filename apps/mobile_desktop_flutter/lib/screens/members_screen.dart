@@ -29,14 +29,20 @@ class MembersView extends StatefulWidget {
 class _MembersViewState extends State<MembersView> {
   late Future<List<Member>> _members = widget.api.listMembers(widget.circle.id);
   late Future<List<JoinRequest>> _joinRequests = _loadJoinRequests();
+  late Future<List<MergeRequest>> _mergeRequests = _loadMergeRequests();
 
   Future<List<JoinRequest>> _loadJoinRequests() => widget.role.isOwner
       ? widget.api.listJoinRequests(widget.circle.id)
       : Future.value(const []);
 
+  Future<List<MergeRequest>> _loadMergeRequests() => widget.role.isOwner
+      ? widget.api.listMergeRequests(widget.circle.id)
+      : Future.value(const []);
+
   void _refresh() => setState(() {
         _members = widget.api.listMembers(widget.circle.id);
         _joinRequests = _loadJoinRequests();
+        _mergeRequests = _loadMergeRequests();
       });
 
   Future<void> _answerJoinRequest(JoinRequest request, bool approve) async {
@@ -91,6 +97,118 @@ class _MembersViewState extends State<MembersView> {
       messenger.showSnackBar(SnackBar(
         content: Text(
             '${member.displayName} is now a ${chosen.label.toLowerCase()}.'),
+      ));
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
+  /// A gentle "3 months ago" style label for a member's last activity.
+  String _sinceLabel(DateTime? when) {
+    if (when == null) return 'a long time';
+    final days = DateTime.now().difference(when).inDays;
+    if (days >= 60) return '${(days / 30).floor()} months ago';
+    if (days >= 30) return 'over a month ago';
+    return '$days days ago';
+  }
+
+  Future<void> _removeMember(Member member) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Remove ${member.displayName}?'),
+        content: Text(
+          '${member.displayName} will lose access to this circle. You can '
+          'invite them again later.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await widget.api.removeMember(widget.circle.id, member.id);
+      if (!mounted) return;
+      _refresh();
+      messenger.showSnackBar(SnackBar(
+        content: Text('${member.displayName} was removed from the circle.'),
+      ));
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
+  /// Owner picks one of their other circles to merge THIS circle into. The
+  /// target circle's owner must accept before anything moves.
+  Future<void> _mergeIntoAnother() async {
+    final messenger = ScaffoldMessenger.of(context);
+    List<Circle> candidates;
+    try {
+      final all = await widget.api.listCircles();
+      candidates = all.where((c) => c.id != widget.circle.id).toList();
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+      return;
+    }
+    if (!mounted) return;
+    if (candidates.isEmpty) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('You need another circle to merge into first.'),
+      ));
+      return;
+    }
+    final target = await showDialog<Circle>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: Text('Merge "${widget.circle.name}" into…'),
+        children: [
+          for (final circle in candidates)
+            ListTile(
+              leading: const Icon(Icons.merge_type, color: AppColors.deepGreen),
+              title: Text(circle.name),
+              subtitle: const Text('Their owner will be asked to accept'),
+              onTap: () => Navigator.of(context).pop(circle),
+            ),
+        ],
+      ),
+    );
+    if (target == null || !mounted) return;
+    try {
+      await widget.api.requestMerge(widget.circle.id, target.id);
+      if (!mounted) return;
+      _refresh();
+      messenger.showSnackBar(SnackBar(
+        content: Text('Sent a merge request to "${target.name}". '
+            'It moves once their owner accepts.'),
+      ));
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
+  Future<void> _answerMergeRequest(MergeRequest request, bool accept) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      if (accept) {
+        await widget.api.acceptMerge(widget.circle.id, request.id);
+      } else {
+        await widget.api.declineMerge(widget.circle.id, request.id);
+      }
+      if (!mounted) return;
+      _refresh();
+      messenger.showSnackBar(SnackBar(
+        content: Text(accept
+            ? '"${request.sourceName}" was merged into this circle.'
+            : 'Merge request from "${request.sourceName}" was declined.'),
       ));
     } on ApiException catch (error) {
       messenger.showSnackBar(SnackBar(content: Text(error.message)));
@@ -253,7 +371,8 @@ class _MembersViewState extends State<MembersView> {
         if (!snapshot.hasData) {
           return const LoadingState(message: 'Finding your family…');
         }
-        final members = snapshot.data!;
+        final members =
+            snapshot.data!.where((m) => m.status != 'removed').toList();
         final myId = widget.api.currentUser?.id;
         return Center(
           child: ConstrainedBox(
@@ -292,6 +411,11 @@ class _MembersViewState extends State<MembersView> {
                         onPressed: _invite,
                         icon: const Icon(Icons.mail_outline),
                         label: const Text('By email'),
+                      ),
+                      TextButton.icon(
+                        onPressed: _mergeIntoAnother,
+                        icon: const Icon(Icons.merge_type),
+                        label: const Text('Merge circles'),
                       ),
                     ],
                   ),
@@ -363,6 +487,58 @@ class _MembersViewState extends State<MembersView> {
                       );
                     },
                   ),
+                if (widget.role.isOwner)
+                  FutureBuilder<List<MergeRequest>>(
+                    future: _mergeRequests,
+                    builder: (context, snap) {
+                      final requests = (snap.data ?? const <MergeRequest>[])
+                          .where((r) => r.targetCircleId == widget.circle.id)
+                          .toList();
+                      if (requests.isEmpty) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: Insets.md),
+                        child: PaperCard(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Merge requests',
+                                  style: theme.textTheme.titleMedium),
+                              const SizedBox(height: Insets.sm),
+                              for (final request in requests) ...[
+                                Row(
+                                  children: [
+                                    const Icon(Icons.merge_type,
+                                        color: AppColors.deepGreen),
+                                    const SizedBox(
+                                        width: Insets.sm + Insets.xs),
+                                    Expanded(
+                                      child: Text(
+                                        '"${request.sourceName}" wants to merge '
+                                        'into this circle',
+                                        style: theme.textTheme.bodyMedium,
+                                      ),
+                                    ),
+                                    TextButton(
+                                      onPressed: () =>
+                                          _answerMergeRequest(request, false),
+                                      child: const Text('Decline'),
+                                    ),
+                                    const SizedBox(width: Insets.xs),
+                                    FilledButton(
+                                      onPressed: () =>
+                                          _answerMergeRequest(request, true),
+                                      child: const Text('Accept'),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: Insets.sm),
+                              ],
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
                 const SizedBox(height: Insets.md),
                 for (final member in members) ...[
                   PaperCard(
@@ -401,6 +577,18 @@ class _MembersViewState extends State<MembersView> {
                                   style: theme.textTheme.labelSmall
                                       ?.copyWith(color: AppColors.attention),
                                 ),
+                              if (member.status == 'active' &&
+                                  member.inactivityTier != 'active')
+                                Text(
+                                  member.isFlaggedInactive
+                                      ? 'Inactive ${_sinceLabel(member.lastActiveAt)} · consider removing'
+                                      : 'Quiet lately · auto-set to ${member.role.label.toLowerCase()}',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: member.isFlaggedInactive
+                                        ? AppColors.attention
+                                        : AppColors.softInk,
+                                  ),
+                                ),
                             ],
                           ),
                         ),
@@ -432,11 +620,24 @@ class _MembersViewState extends State<MembersView> {
                           ],
                         ),
                         if (widget.role.isOwner && member.userId != myId)
-                          IconButton(
-                            tooltip: 'Change role',
-                            onPressed: () => _editRole(member),
-                            icon: const Icon(Icons.edit_outlined,
+                          PopupMenuButton<String>(
+                            tooltip: 'Manage member',
+                            icon: const Icon(Icons.more_vert,
                                 size: 20, color: AppColors.softInk),
+                            onSelected: (value) {
+                              if (value == 'role') _editRole(member);
+                              if (value == 'remove') _removeMember(member);
+                            },
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(
+                                value: 'role',
+                                child: Text('Change role'),
+                              ),
+                              PopupMenuItem(
+                                value: 'remove',
+                                child: Text('Remove from circle'),
+                              ),
+                            ],
                           ),
                       ],
                     ),

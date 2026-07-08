@@ -16,7 +16,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from PIL import Image
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import and_, delete, inspect as sa_inspect, or_, select, text
+from sqlalchemy import and_, delete, func, inspect as sa_inspect, or_, select, text
 from sqlalchemy.orm import Session
 
 from .auth import create_access_token, current_user, hash_password, verify_password
@@ -28,6 +28,7 @@ from .models import (
     CircleInviteLink,
     CircleJoinRequest,
     CircleMember,
+    CircleMergeRequest,
     MemoryCircle,
     MemoryItem,
     Notification,
@@ -50,6 +51,11 @@ ROLE_ORDER = {"viewer": 0, "contributor": 1, "approver": 2, "owner": 3}
 WRITE_ROLES = {"owner", "approver", "contributor"}
 APPROVE_ROLES = {"owner", "approver"}
 FIRST_VIEW_ASSET_GRACE = timedelta(minutes=30)
+# Member inactivity lifecycle: after 30 idle days a member is demoted one
+# role step; after 90 idle days they are flagged to the owner for removal.
+INACTIVITY_DEMOTE_DAYS = 30
+INACTIVITY_FLAG_DAYS = 90
+DEMOTION_STEP = {"approver": "contributor", "contributor": "viewer"}
 
 app = FastAPI(title="Omoide no Wa API", version="0.1.0")
 
@@ -115,6 +121,23 @@ def ensure_notification_tables():
     Base.metadata.tables["notifications"].create(bind=engine, checkfirst=True)
 
 
+def ensure_circle_merge_support():
+    """Adds circle archive columns and the merge-request table for
+    databases created before circle merging existed."""
+    inspector = sa_inspect(engine)
+    if "memory_circles" in inspector.get_table_names():
+        existing = {column["name"] for column in inspector.get_columns("memory_circles")}
+        additions = {
+            "status": "VARCHAR(40) DEFAULT 'active'",
+            "merged_into_id": "INTEGER",
+        }
+        with engine.begin() as connection:
+            for column_name, definition in additions.items():
+                if column_name not in existing:
+                    connection.execute(text(f"ALTER TABLE memory_circles ADD COLUMN {column_name} {definition}"))
+    Base.metadata.tables["circle_merge_requests"].create(bind=engine, checkfirst=True)
+
+
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
@@ -122,6 +145,7 @@ def startup():
     ensure_album_removal_columns()
     ensure_memory_approval_columns()
     ensure_notification_tables()
+    ensure_circle_merge_support()
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
 
@@ -161,6 +185,10 @@ class InviteLinkIn(BaseModel):
 class MemberPatch(BaseModel):
     role: Optional[str] = None
     status: Optional[str] = None
+
+
+class MergeRequestIn(BaseModel):
+    target_circle_id: int
 
 
 class MemoryIn(BaseModel):
@@ -276,12 +304,14 @@ def serialize_circle(circle: MemoryCircle):
         "description": circle.description,
         "owner_user_id": circle.owner_user_id,
         "default_approval_required": circle.default_approval_required,
+        "status": getattr(circle, "status", None) or "active",
+        "merged_into_id": getattr(circle, "merged_into_id", None),
         "created_at": circle.created_at,
         "updated_at": circle.updated_at,
     }
 
 
-def serialize_member(member: CircleMember):
+def serialize_member(member: CircleMember, last_active_at=None, inactivity_tier="active"):
     return {
         "id": member.id,
         "circle_id": member.circle_id,
@@ -290,6 +320,8 @@ def serialize_member(member: CircleMember):
         "status": member.status,
         "invited_by": member.invited_by,
         "user": user_public(member.user) if member.user else None,
+        "last_active_at": last_active_at,
+        "inactivity_tier": inactivity_tier,
     }
 
 
@@ -541,6 +573,63 @@ def album_photo_cap(db: Session, circle_id: int) -> int:
     return PHOTOS_PER_MEMBER * max(1, len(active_member_ids(db, circle_id)))
 
 
+def member_last_active(db: Session, circle_id: int) -> dict[int, datetime]:
+    """Each active member's most recent activity in this circle, derived from
+    the activity log. Members with no logged activity fall back to when they
+    joined, so brand-new members are never treated as idle."""
+    rows = db.execute(
+        select(ActivityLog.actor_user_id, func.max(ActivityLog.created_at))
+        .where(ActivityLog.circle_id == circle_id)
+        .group_by(ActivityLog.actor_user_id)
+    ).all()
+    last_active = {user_id: seen for user_id, seen in rows}
+    result: dict[int, datetime] = {}
+    for member in db.scalars(
+        select(CircleMember).where(CircleMember.circle_id == circle_id, CircleMember.status == "active")
+    ).all():
+        result[member.user_id] = last_active.get(member.user_id) or member.created_at
+    return result
+
+
+def inactivity_tier(circle: MemoryCircle, member: CircleMember, last_active: datetime, reference: datetime) -> str:
+    """'active', 'demote' (>=30 idle days), or 'flagged' (>=90 idle days).
+    The circle owner is always exempt."""
+    if member.user_id == circle.owner_user_id or member.role == "owner":
+        return "active"
+    idle_days = (reference - last_active).days
+    if idle_days >= INACTIVITY_FLAG_DAYS:
+        return "flagged"
+    if idle_days >= INACTIVITY_DEMOTE_DAYS:
+        return "demote"
+    return "active"
+
+
+def sweep_circle_inactivity(db: Session, circle_id: int) -> dict:
+    """Applies the inactivity policy: demote members idle >=30 days one role
+    step (owner exempt), and collect members idle >=90 days for the owner to
+    review. Idempotent and safe to run repeatedly (e.g. from a daily cron)."""
+    circle = db.get(MemoryCircle, circle_id)
+    now_ts = datetime.utcnow()
+    last_active = member_last_active(db, circle_id)
+    demoted: list[int] = []
+    flagged: list[int] = []
+    for member in db.scalars(
+        select(CircleMember).where(CircleMember.circle_id == circle_id, CircleMember.status == "active")
+    ).all():
+        seen = last_active.get(member.user_id, member.created_at)
+        tier = inactivity_tier(circle, member, seen, now_ts)
+        if tier == "flagged":
+            flagged.append(member.user_id)
+        if tier in ("demote", "flagged") and member.role in DEMOTION_STEP:
+            new_role = DEMOTION_STEP[member.role]
+            member.role = new_role
+            # Attribute the system action to the owner, not the demoted member,
+            # so it does not reset the member's own last-active clock.
+            log_activity(db, circle_id, circle.owner_user_id, "member.auto_demoted", "member", member.id, {"to": new_role})
+            demoted.append(member.user_id)
+    return {"demoted": demoted, "flagged": flagged}
+
+
 def approval_progress(db: Session, memory: MemoryItem):
     needed_ids = approval_member_ids(db, memory.circle_id)
     votes = sorted(set(json.loads(getattr(memory, "approval_votes_json", None) or "[]")))
@@ -759,7 +848,11 @@ def list_circles(db: Session = Depends(get_db), user: User = Depends(current_use
     rows = db.scalars(
         select(MemoryCircle)
         .join(CircleMember, CircleMember.circle_id == MemoryCircle.id)
-        .where(CircleMember.user_id == user.id, CircleMember.status == "active")
+        .where(
+            CircleMember.user_id == user.id,
+            CircleMember.status == "active",
+            MemoryCircle.status == "active",
+        )
         .order_by(MemoryCircle.created_at.desc())
     ).all()
     return [serialize_circle(row) for row in rows]
@@ -793,7 +886,10 @@ def search_circles(q: str = "", db: Session = Depends(get_db), user: User = Depe
         return []
     like = f"%{query}%"
     circles = db.scalars(
-        select(MemoryCircle).where(MemoryCircle.name.ilike(like)).order_by(MemoryCircle.name).limit(20)
+        select(MemoryCircle)
+        .where(MemoryCircle.name.ilike(like), MemoryCircle.status == "active")
+        .order_by(MemoryCircle.name)
+        .limit(20)
     ).all()
     results = []
     for circle in circles:
@@ -867,6 +963,174 @@ def decline_join_request(circle_id: int, request_id: int, db: Session = Depends(
         raise HTTPException(status_code=404, detail="Request not found")
     request.status = "declined"
     log_activity(db, circle_id, user.id, "join_request.declined", "member", request.user_id)
+    db.commit()
+    return {"status": "declined"}
+
+
+def serialize_merge_request(db: Session, request: CircleMergeRequest):
+    source = db.get(MemoryCircle, request.source_circle_id)
+    target = db.get(MemoryCircle, request.target_circle_id)
+    return {
+        "id": request.id,
+        "source_circle_id": request.source_circle_id,
+        "target_circle_id": request.target_circle_id,
+        "requested_by": request.requested_by,
+        "status": request.status,
+        "source": {"id": source.id, "name": source.name} if source else None,
+        "target": {"id": target.id, "name": target.name} if target else None,
+        "created_at": request.created_at,
+    }
+
+
+def perform_circle_merge(db: Session, source: MemoryCircle, target: MemoryCircle, accepting_owner_id: int):
+    """Moves all of a source circle's content and members into the target
+    circle, deduping photos by fingerprint, then archives the source."""
+    # 1. Assets: move, or dedupe against a matching hash already in target.
+    target_by_hash = {
+        asset.content_hash: asset
+        for asset in db.scalars(select(PhotoAsset).where(PhotoAsset.circle_id == target.id)).all()
+    }
+    for asset in db.scalars(select(PhotoAsset).where(PhotoAsset.circle_id == source.id)).all():
+        twin = target_by_hash.get(asset.content_hash)
+        if twin is not None:
+            # Point this asset's memories at the target's existing copy, drop the dup.
+            for memory in db.scalars(select(MemoryItem).where(MemoryItem.asset_id == asset.id)).all():
+                memory.asset_id = twin.id
+            db.delete(asset)
+        else:
+            asset.circle_id = target.id
+            target_by_hash[asset.content_hash] = asset
+    # 2. Memories move to the target circle.
+    for memory in db.scalars(select(MemoryItem).where(MemoryItem.circle_id == source.id)).all():
+        memory.circle_id = target.id
+    # 3. Albums (and their pages, via album_id) move to the target circle.
+    for album in db.scalars(select(Album).where(Album.circle_id == source.id)).all():
+        album.circle_id = target.id
+    # 4. Members: add to target, or keep the stronger of the two roles.
+    for member in db.scalars(
+        select(CircleMember).where(CircleMember.circle_id == source.id, CircleMember.status == "active")
+    ).all():
+        existing = member_for(db, target.id, member.user_id)
+        # A merged-in owner becomes an approver; a circle keeps a single owner.
+        incoming_role = "approver" if member.role == "owner" else member.role
+        if existing is None:
+            db.add(CircleMember(
+                circle_id=target.id,
+                user_id=member.user_id,
+                role=incoming_role,
+                status="active",
+                invited_by=accepting_owner_id,
+            ))
+        elif ROLE_ORDER.get(incoming_role, 0) > ROLE_ORDER.get(existing.role, 0) and existing.role != "owner":
+            existing.role = incoming_role
+    # 5. Archive the source circle.
+    source.status = "archived"
+    source.merged_into_id = target.id
+    log_activity(db, target.id, accepting_owner_id, "circle.merged_in", "circle", source.id, {"source": source.name})
+    # 6. Tell the source circle's members where their memories went.
+    for member in db.scalars(
+        select(CircleMember).where(CircleMember.circle_id == target.id, CircleMember.status == "active")
+    ).all():
+        queue_notification(
+            db,
+            user_id=member.user_id,
+            circle_id=target.id,
+            type="circle_merged",
+            title="Circles were merged",
+            body=f'"{source.name}" was merged into "{target.name}".',
+            target_type="circle",
+            target_id=target.id,
+        )
+
+
+@app.post("/circles/{source_id}/merge-requests")
+def create_merge_request(source_id: int, payload: MergeRequestIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, source_id, user, {"owner"})
+    if payload.target_circle_id == source_id:
+        raise HTTPException(status_code=400, detail="Choose a different circle to merge into")
+    source = db.get(MemoryCircle, source_id)
+    target = db.get(MemoryCircle, payload.target_circle_id)
+    if not target or getattr(target, "status", "active") != "active":
+        raise HTTPException(status_code=404, detail="Target circle not found")
+    if getattr(source, "status", "active") != "active":
+        raise HTTPException(status_code=400, detail="This circle is no longer active")
+    existing = db.scalar(
+        select(CircleMergeRequest).where(
+            CircleMergeRequest.source_circle_id == source_id,
+            CircleMergeRequest.target_circle_id == payload.target_circle_id,
+            CircleMergeRequest.status == "pending",
+        )
+    )
+    if existing:
+        return serialize_merge_request(db, existing)
+    request = CircleMergeRequest(
+        source_circle_id=source_id,
+        target_circle_id=payload.target_circle_id,
+        requested_by=user.id,
+        status="pending",
+    )
+    db.add(request)
+    db.flush()
+    queue_notification(
+        db,
+        user_id=target.owner_user_id,
+        circle_id=target.id,
+        type="merge_request",
+        title="Merge request",
+        body=f'"{source.name}" wants to merge into "{target.name}".',
+        target_type="merge_request",
+        target_id=request.id,
+    )
+    log_activity(db, source_id, user.id, "merge_request.created", "circle", payload.target_circle_id)
+    db.commit()
+    db.refresh(request)
+    return serialize_merge_request(db, request)
+
+
+@app.get("/circles/{circle_id}/merge-requests")
+def list_merge_requests(circle_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, {"owner"})
+    requests = db.scalars(
+        select(CircleMergeRequest)
+        .where(
+            CircleMergeRequest.status == "pending",
+            or_(
+                CircleMergeRequest.source_circle_id == circle_id,
+                CircleMergeRequest.target_circle_id == circle_id,
+            ),
+        )
+        .order_by(CircleMergeRequest.created_at.asc())
+    ).all()
+    return [serialize_merge_request(db, request) for request in requests]
+
+
+@app.post("/circles/{circle_id}/merge-requests/{request_id}/accept")
+def accept_merge_request(circle_id: int, request_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    request = db.get(CircleMergeRequest, request_id)
+    if not request or request.target_circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Merge request not found")
+    # Only the target circle's owner may accept a merge into it.
+    require_member(db, request.target_circle_id, user, {"owner"})
+    if request.status != "pending":
+        raise HTTPException(status_code=400, detail="This merge request was already handled")
+    source = db.get(MemoryCircle, request.source_circle_id)
+    target = db.get(MemoryCircle, request.target_circle_id)
+    if not source or getattr(source, "status", "active") != "active":
+        raise HTTPException(status_code=400, detail="The other circle is no longer available to merge")
+    perform_circle_merge(db, source, target, user.id)
+    request.status = "accepted"
+    db.commit()
+    return serialize_merge_request(db, request)
+
+
+@app.post("/circles/{circle_id}/merge-requests/{request_id}/decline")
+def decline_merge_request(circle_id: int, request_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    request = db.get(CircleMergeRequest, request_id)
+    if not request or request.target_circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Merge request not found")
+    require_member(db, request.target_circle_id, user, {"owner"})
+    request.status = "declined"
+    log_activity(db, request.target_circle_id, user.id, "merge_request.declined", "circle", request.source_circle_id)
     db.commit()
     return {"status": "declined"}
 
@@ -988,9 +1252,37 @@ def decline_membership(circle_id: int, db: Session = Depends(get_db), user: User
 
 @app.get("/circles/{circle_id}/members")
 def list_members(circle_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    require_member(db, circle_id, user)
+    member = require_member(db, circle_id, user)
+    circle = db.get(MemoryCircle, circle_id)
+    # When the owner reviews the roster, apply overdue demotions first so the
+    # roles they see are current.
+    if member.role == "owner":
+        result = sweep_circle_inactivity(db, circle_id)
+        if result["demoted"]:
+            db.commit()
+    now_ts = datetime.utcnow()
+    last_active = member_last_active(db, circle_id)
     members = db.scalars(select(CircleMember).where(CircleMember.circle_id == circle_id)).all()
-    return [serialize_member(member) for member in members]
+    serialized = []
+    for item in members:
+        if item.status == "active":
+            seen = last_active.get(item.user_id, item.created_at)
+            tier = inactivity_tier(circle, item, seen, now_ts)
+        else:
+            seen, tier = None, "active"
+        serialized.append(serialize_member(item, last_active_at=seen, inactivity_tier=tier))
+    return serialized
+
+
+@app.post("/circles/{circle_id}/members/apply-inactivity")
+def apply_inactivity(circle_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Runs the inactivity sweep (demote idle members, flag long-idle ones).
+    Owner-triggered today; safe to call from a scheduled job for hands-off
+    operation."""
+    require_member(db, circle_id, user, {"owner"})
+    result = sweep_circle_inactivity(db, circle_id)
+    db.commit()
+    return result
 
 
 @app.post("/circles/{circle_id}/invite-links")

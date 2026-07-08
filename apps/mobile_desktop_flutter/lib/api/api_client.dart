@@ -307,6 +307,31 @@ class ApiClient {
         {'role': role.apiValue},
       ) as Map<String, dynamic>);
 
+  /// Removes a member from the circle (they keep no access afterward).
+  Future<void> removeMember(int circleId, int memberId) async => _patchJson(
+        '/circles/$circleId/members/$memberId',
+        {'status': 'removed'},
+      );
+
+  // ---- Merging circles ----
+
+  Future<List<MergeRequest>> listMergeRequests(int circleId) async => [
+        for (final item
+            in await _get('/circles/$circleId/merge-requests') as List<dynamic>)
+          MergeRequest.fromJson(item as Map<String, dynamic>),
+      ];
+
+  Future<MergeRequest> requestMerge(int sourceId, int targetCircleId) async =>
+      MergeRequest.fromJson(await _post('/circles/$sourceId/merge-requests', {
+        'target_circle_id': targetCircleId,
+      }) as Map<String, dynamic>);
+
+  Future<void> acceptMerge(int circleId, int requestId) async =>
+      _post('/circles/$circleId/merge-requests/$requestId/accept');
+
+  Future<void> declineMerge(int circleId, int requestId) async =>
+      _post('/circles/$circleId/merge-requests/$requestId/decline');
+
   Future<Member> inviteMember(
     int circleId, {
     required String email,

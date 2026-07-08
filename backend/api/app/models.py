@@ -32,6 +32,9 @@ class MemoryCircle(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     owner_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     default_approval_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    # "active" or "archived"; a circle is archived after it is merged away.
+    status: Mapped[str] = mapped_column(String(40), default="active")
+    merged_into_id: Mapped[Optional[int]] = mapped_column(ForeignKey("memory_circles.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
 
@@ -127,6 +130,21 @@ class CircleJoinRequest(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     circle_id: Mapped[int] = mapped_column(ForeignKey("memory_circles.id"), index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class CircleMergeRequest(Base):
+    """A request from one circle's owner to merge their circle into another.
+    The target circle's owner must accept before any content is moved."""
+
+    __tablename__ = "circle_merge_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_circle_id: Mapped[int] = mapped_column(ForeignKey("memory_circles.id"), index=True)
+    target_circle_id: Mapped[int] = mapped_column(ForeignKey("memory_circles.id"), index=True)
+    requested_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     status: Mapped[str] = mapped_column(String(40), default="pending")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)

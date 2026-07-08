@@ -19,7 +19,25 @@ Circle and role endpoints:
 - `PATCH /circles/{circle_id}`
 - `POST /circles/{circle_id}/invites`
 - `GET /circles/{circle_id}/members`
-- `PATCH /circles/{circle_id}/members/{member_id}`
+- `PATCH /circles/{circle_id}/members/{member_id}` (set `status: "removed"` to remove a member)
+- `POST /circles/{circle_id}/members/apply-inactivity` (owner; run the inactivity sweep)
+- `POST /circles/{source_id}/merge-requests` (owner of source; body `{target_circle_id}`)
+- `GET /circles/{circle_id}/merge-requests` (owner; incoming + outgoing pending)
+- `POST /circles/{circle_id}/merge-requests/{id}/accept` (owner of target; performs the merge)
+- `POST /circles/{circle_id}/merge-requests/{id}/decline` (owner of target)
+
+Circle merging: the source owner requests a merge into a target circle; the
+**target owner must accept**. On accept, all photos (deduped by content hash),
+memories, albums, and members move to the target — a person in both circles
+keeps their higher role — and the source circle is archived (`status`
+`archived`, hidden from lists and search, not deleted).
+
+Member inactivity, derived from the activity log (owner always exempt): a
+member idle **>=30 days** is auto-demoted one role step (approver → contributor
+→ viewer) when the owner next opens the roster or `apply-inactivity` runs; a
+member idle **>=90 days** is flagged (`inactivity_tier: "flagged"` on the
+member payload) for the owner to remove. Members carry `last_active_at` and
+`inactivity_tier` (`active`/`demote`/`flagged`).
 
 Assets and memories:
 

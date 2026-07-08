@@ -3,6 +3,56 @@
 Use this log for short handoffs between human maintainers, Codex, and Claude.
 Newest entry goes at the top.
 
+## 2026-07-08 - Claude (circle merge + inactivity)
+
+Branch: `feature/circle-merge-and-inactivity` (cut from `main` @ `521f4d6`)
+
+Owner: Claude
+
+Intent: Founder's final asks for the day — merge two circles, and an
+inactivity lifecycle for members.
+
+Delivered:
+- **Merge circles** (approval-gated, mirrors album-removal). Source owner
+  requests a merge into a target; target owner accepts. On accept, photos
+  (deduped by content hash), memories, albums, and members move to the
+  target (shared member keeps higher role); source circle is archived
+  (`status=archived`, hidden from `/circles` and search). New
+  `CircleMergeRequest` model + `ensure_circle_merge_support()` backfill.
+- **Member inactivity** from the activity log (owner exempt): >=30 idle
+  days auto-demotes one role step; >=90 idle days flags for owner removal.
+  `GET /circles/{id}/members` runs the sweep for owners and returns
+  `last_active_at` + `inactivity_tier`; `POST .../members/apply-inactivity`
+  is cron-ready. Removal reuses `PATCH member status=removed`.
+- Flutter: merge initiation + incoming-merge cards and an inactive-member
+  section with Remove, all in `members_screen.dart`; API/model support in
+  `api_client.dart` / `models.dart`.
+
+Files (committed): `backend/api/app/{main,models}.py`,
+`backend/api/tests/test_mvp.py`, `apps/.../lib/api/{api_client,models}.dart`,
+`apps/.../lib/screens/members_screen.dart`, `docs/API.md`.
+
+Checks: `pytest` 26 passed; `py_compile` OK; `flutter analyze lib/api
+lib/screens/members_screen.dart` clean.
+
+Known risks / COLLISION:
+- Codex has an **uncommitted in-flight i18n effort** in the working tree:
+  untracked `apps/.../lib/i18n/` (currently has compile errors in
+  `index.dart`) plus uncommitted edits to `circles_screen.dart`,
+  `memory_circle_app.dart`, `auth_screen.dart`, `settings_screen.dart`,
+  `app_shell.dart`, `error_state.dart`, `loading_state.dart`,
+  `circle_dashboard_screen.dart`. I did **not** touch or commit any of
+  those — my commit contains only the 6 files above. A whole-project
+  `flutter analyze` will fail until Codex finishes i18n; my files analyze
+  clean in isolation.
+- Merge does not yet surface an owner-facing "this circle was archived"
+  view for the source; source members are notified via the notification
+  queue only.
+
+Next recommended step:
+- Codex: finish/commit i18n, then a whole-project `flutter analyze`.
+- Do not push `main` (deploys omoidenowa.com) without founder approval.
+
 ## 2026-07-08 - Claude
 
 Branch: `feature/album-edit-and-add-photos`

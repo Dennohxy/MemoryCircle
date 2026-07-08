@@ -668,3 +668,100 @@ def test_declined_invitation_stays_out(client):
     assert declined.status_code == 200, declined.text
     assert all(c["id"] != circle_id for c in client.get("/circles", headers=auth(newcomer)).json())
     assert client.get("/me/invitations", headers=auth(newcomer)).json() == []
+
+
+def _make_owner_with_circle(client, email, name, circle_name):
+    owner = register(client, email, name)
+    circle = client.post("/circles", json={"name": circle_name}, headers=auth(owner)).json()
+    return owner, circle["id"]
+
+
+def test_circle_merge_moves_content_and_archives_source(client):
+    # Two owners, two circles.
+    owner_a, alpha = _make_owner_with_circle(client, "a@test.com", "Owner A", "Grandma's House")
+    owner_b, beta = _make_owner_with_circle(client, "b@test.com", "Owner B", "Otieno Family")
+
+    # A shared person is an approver in the source and a viewer in the target.
+    # The first invite creates the account (default password ChangeMe123!).
+    for circle_id, role in ((alpha, "approver"), (beta, "viewer")):
+        client.post(f"/circles/{circle_id}/invites", json={"email": "shared@test.com", "role": role},
+                    headers=auth(owner_a if circle_id == alpha else owner_b))
+    shared = client.post("/auth/login", json={"email": "shared@test.com", "password": "ChangeMe123!"}).json()["token"]
+    client.post(f"/circles/{alpha}/membership/accept", headers=auth(shared))
+    client.post(f"/circles/{beta}/membership/accept", headers=auth(shared))
+
+    # Source content: a unique photo/memory/album, plus a photo identical to one in the target.
+    _, mem = upload_memory(client, alpha, owner_a, status="pending")
+    client.post(f"/circles/{alpha}/memories/{mem['id']}/approve", headers=auth(owner_a))
+    client.post(f"/circles/{alpha}/memories/{mem['id']}/approve", headers=auth(shared))
+    album = client.post(f"/circles/{alpha}/albums", json={"title": "Trip"}, headers=auth(owner_a)).json()
+    # Identical photo (same default color -> same content hash) in both circles.
+    client.post(f"/circles/{alpha}/assets/upload", files={"file": ("dup.jpg", image_file(), "image/jpeg")}, headers=auth(owner_a))
+    client.post(f"/circles/{beta}/assets/upload", files={"file": ("dup.jpg", image_file(), "image/jpeg")}, headers=auth(owner_b))
+
+    # Source owner requests the merge into the target.
+    req = client.post(f"/circles/{alpha}/merge-requests", json={"target_circle_id": beta}, headers=auth(owner_a))
+    assert req.status_code == 200, req.text
+    request_id = req.json()["id"]
+
+    # Only the TARGET owner may accept.
+    assert client.post(f"/circles/{beta}/merge-requests/{request_id}/accept", headers=auth(owner_a)).status_code == 403
+    accepted = client.post(f"/circles/{beta}/merge-requests/{request_id}/accept", headers=auth(owner_b))
+    assert accepted.status_code == 200, accepted.text
+
+    # Source is archived and gone from its owner's list.
+    assert all(c["id"] != alpha for c in client.get("/circles", headers=auth(owner_a)).json())
+
+    # The album and memory now live in the target.
+    beta_albums = client.get(f"/circles/{beta}/albums", headers=auth(owner_b)).json()
+    assert any(a["title"] == "Trip" for a in beta_albums)
+    beta_photos = client.get(f"/circles/{beta}/photos", headers=auth(owner_b)).json()
+    asset_ids = [p["asset"]["id"] for p in beta_photos]
+    assert len(asset_ids) == len(set(asset_ids)), "identical photo should be deduped, not duplicated"
+
+    # Shared person kept the higher role (approver from the source).
+    members = client.get(f"/circles/{beta}/members", headers=auth(owner_b)).json()
+    shared_member = next(m for m in members if m["user"]["email"] == "shared@test.com")
+    assert shared_member["role"] == "approver"
+
+
+def _backdate_member_activity(user_email, circle_id, days):
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+    from app.database import engine
+    from app.models import ActivityLog, CircleMember, User
+    from datetime import datetime, timedelta
+    when = datetime.utcnow() - timedelta(days=days)
+    with Session(engine) as session:
+        uid = session.scalar(select(User.id).where(User.email == user_email))
+        for log in session.scalars(select(ActivityLog).where(ActivityLog.circle_id == circle_id, ActivityLog.actor_user_id == uid)):
+            log.created_at = when
+        member = session.scalar(select(CircleMember).where(CircleMember.circle_id == circle_id, CircleMember.user_id == uid))
+        member.created_at = when
+        session.commit()
+
+
+def test_inactive_members_are_demoted_then_flagged(client):
+    from sqlalchemy import select  # local import for helper symmetry
+    circle_id, owner, approver, contributor, viewer = setup_circle(client)
+
+    # Approver goes quiet for 35 days -> demoted one step to contributor.
+    _backdate_member_activity("approver@test.com", circle_id, 35)
+    # Contributor goes quiet for 100 days -> flagged for the owner.
+    _backdate_member_activity("contributor@test.com", circle_id, 100)
+
+    members = client.get(f"/circles/{circle_id}/members", headers=auth(owner)).json()
+    by_email = {m["user"]["email"]: m for m in members}
+
+    assert by_email["approver@test.com"]["role"] == "contributor"  # auto-demoted
+    assert by_email["contributor@test.com"]["inactivity_tier"] == "flagged"
+    # Owner is never demoted or flagged.
+    assert by_email["owner@test.com"]["role"] == "owner"
+    assert by_email["owner@test.com"]["inactivity_tier"] == "active"
+
+    # Owner removes the flagged member with a plain status patch.
+    flagged_id = by_email["contributor@test.com"]["id"]
+    removed = client.patch(f"/circles/{circle_id}/members/{flagged_id}", json={"status": "removed"}, headers=auth(owner))
+    assert removed.status_code == 200, removed.text
+    remaining = client.get(f"/circles/{circle_id}/members", headers=auth(owner)).json()
+    assert all(m["user"]["email"] != "contributor@test.com" or m["status"] == "removed" for m in remaining)

@@ -113,6 +113,8 @@ class Member {
     required this.role,
     required this.status,
     this.user,
+    this.lastActiveAt,
+    this.inactivityTier = 'active',
   });
 
   factory Member.fromJson(Map<String, dynamic> json) => Member(
@@ -123,6 +125,10 @@ class Member {
         user: json['user'] == null
             ? null
             : UserProfile.fromJson(json['user'] as Map<String, dynamic>),
+        lastActiveAt: _asDate(json['last_active_at']),
+        inactivityTier: _asText(json['inactivity_tier']).isEmpty
+            ? 'active'
+            : _asText(json['inactivity_tier']),
       );
 
   final int id;
@@ -131,8 +137,44 @@ class Member {
   final String status;
   final UserProfile? user;
 
+  /// When this member last did anything in the circle.
+  final DateTime? lastActiveAt;
+
+  /// 'active', 'demote' (idle >=30 days), or 'flagged' (idle >=90 days).
+  final String inactivityTier;
+
+  bool get isFlaggedInactive => inactivityTier == 'flagged';
+
   String get displayName => user?.displayName ?? 'Family member';
   String get email => user?.email ?? '';
+}
+
+/// A pending request to merge one circle into another.
+class MergeRequest {
+  const MergeRequest({
+    required this.id,
+    required this.sourceCircleId,
+    required this.targetCircleId,
+    required this.status,
+    this.sourceName = '',
+    this.targetName = '',
+  });
+
+  factory MergeRequest.fromJson(Map<String, dynamic> json) => MergeRequest(
+        id: _asInt(json['id']),
+        sourceCircleId: _asInt(json['source_circle_id']),
+        targetCircleId: _asInt(json['target_circle_id']),
+        status: _asText(json['status']),
+        sourceName: _asText((json['source'] as Map<String, dynamic>?)?['name']),
+        targetName: _asText((json['target'] as Map<String, dynamic>?)?['name']),
+      );
+
+  final int id;
+  final int sourceCircleId;
+  final int targetCircleId;
+  final String status;
+  final String sourceName;
+  final String targetName;
 }
 
 /// A registered person found via member search, with whether they are
