@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
 import '../api/models.dart';
 import '../screens/auth_screen.dart';
 import '../screens/circles_screen.dart';
+import 'push_notifications.dart';
 import 'theme.dart';
 
 /// Root widget: owns the API client, restores the saved sign-in so family
@@ -18,6 +21,7 @@ class MemoryCircleApp extends StatefulWidget {
 
 class _MemoryCircleAppState extends State<MemoryCircleApp> {
   final ApiClient _api = ApiClient();
+  late final PushNotifications _pushNotifications = PushNotifications(_api);
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   final GlobalKey<ScaffoldMessengerState> _messengerKey =
       GlobalKey<ScaffoldMessengerState>();
@@ -40,6 +44,9 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
         _ready = true;
       });
     }
+    if (user != null) {
+      unawaited(_pushNotifications.configureForSignedInUser());
+    }
   }
 
   /// The saved sign-in stopped working (for example after 30 days); return
@@ -60,6 +67,12 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
   }
 
   @override
+  void dispose() {
+    _pushNotifications.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Memory Circle',
@@ -72,7 +85,10 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
           : _user == null
               ? AuthScreen(
                   api: _api,
-                  onSignedIn: (user) => setState(() => _user = user),
+                  onSignedIn: (user) {
+                    setState(() => _user = user);
+                    unawaited(_pushNotifications.configureForSignedInUser());
+                  },
                 )
               : CirclesScreen(
                   api: _api,
