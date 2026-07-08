@@ -54,7 +54,9 @@ class AlbumPageView extends StatelessWidget {
               painter: ScrapbookDecorPainter(
                 seed: seed,
                 palette: palette,
-                dense: isTitle,
+                // Keep the cover calm so the hero photo is the focus; the
+                // busy decoration was competing with it.
+                dense: false,
               ),
             ),
           ),
@@ -106,11 +108,11 @@ class _TitleLayout extends StatelessWidget {
       final aspect = (cover['aspect_ratio'] as num?)?.toDouble() ?? 1.0;
       return LayoutBuilder(
         builder: (context, constraints) {
-          // Size the cover to its own aspect ratio (so it fills the frame with
-          // no letterbox), capped to a share of the page. Then center the
-          // photo + title together so the whitespace above and below is even.
-          final maxPhotoHeight = constraints.maxHeight * 0.58;
-          final maxPhotoWidth = constraints.maxWidth * 0.86;
+          // A large hero cover: size to the photo's own aspect ratio (no crop,
+          // no letterbox), filling most of the page, then center the photo and
+          // title as a group so the margins are even all around.
+          final maxPhotoHeight = constraints.maxHeight * 0.68;
+          final maxPhotoWidth = constraints.maxWidth * 0.94;
           var photoWidth = maxPhotoWidth;
           var photoHeight = photoWidth / (aspect <= 0 ? 1.0 : aspect);
           if (photoHeight > maxPhotoHeight) {
@@ -119,12 +121,27 @@ class _TitleLayout extends StatelessWidget {
           }
           return Column(
             mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              SizedBox(
+              // A soft white print border so the photo reads as a placed
+              // keepsake rather than floating in the page.
+              Container(
                 width: photoWidth,
                 height: photoHeight,
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x22000000),
+                      blurRadius: 12,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
+                ),
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
+                  borderRadius: BorderRadius.circular(6),
                   child: ColoredBox(
                     color: const Color(0xFFEFE8D8),
                     child: AuthedImage(
