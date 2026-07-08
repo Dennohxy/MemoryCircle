@@ -102,7 +102,7 @@ class _MembersViewState extends State<MembersView> {
     // fall back to the published app link.
     final appUrl = base.scheme.startsWith('http')
         ? '${base.scheme}://${base.authority}${base.path}'
-        : 'https://dennohxy.github.io/MemoryCircle/';
+        : 'https://omoidenowa.com/';
     final inviter = widget.api.currentUser?.displayName ?? 'Your family';
     final greeting = name.isEmpty ? 'Hello!' : 'Hello $name!';
     return '$greeting\n\n'
