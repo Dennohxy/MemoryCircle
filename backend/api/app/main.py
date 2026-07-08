@@ -625,17 +625,83 @@ def invite_member(circle_id: int, payload: InviteIn, db: Session = Depends(get_d
         )
         db.add(invited)
         db.flush()
-    member = member_for(db, circle_id, invited.id)
+    # Owner-initiated adds start as "invited" so the person accepts before
+    # they are in the circle and can see the album.
+    member = db.scalar(
+        select(CircleMember).where(
+            CircleMember.circle_id == circle_id,
+            CircleMember.user_id == invited.id,
+        )
+    )
     if not member:
-        member = CircleMember(circle_id=circle_id, user_id=invited.id, role=payload.role, status="active", invited_by=user.id)
+        member = CircleMember(circle_id=circle_id, user_id=invited.id, role=payload.role, status="invited", invited_by=user.id)
         db.add(member)
     else:
         member.role = payload.role
-        member.status = "active"
+        if member.status != "active":
+            member.status = "invited"
     log_activity(db, circle_id, user.id, "member.invited", "member", invited.id, {"role": payload.role})
     db.commit()
     db.refresh(member)
     return serialize_member(member)
+
+
+@app.get("/me/invitations")
+def my_invitations(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Pending circle invitations the signed-in person can accept or decline."""
+    rows = db.scalars(
+        select(CircleMember).where(
+            CircleMember.user_id == user.id,
+            CircleMember.status == "invited",
+        )
+    ).all()
+    invitations = []
+    for member in rows:
+        circle = db.get(MemoryCircle, member.circle_id)
+        if not circle:
+            continue
+        inviter = db.get(User, member.invited_by) if member.invited_by else None
+        invitations.append({
+            "circle_id": circle.id,
+            "circle_name": circle.name,
+            "circle_description": circle.description,
+            "role": member.role,
+            "inviter_name": inviter.display_name if inviter else "",
+        })
+    return invitations
+
+
+def pending_membership(db: Session, circle_id: int, user_id: int) -> Optional[CircleMember]:
+    return db.scalar(
+        select(CircleMember).where(
+            CircleMember.circle_id == circle_id,
+            CircleMember.user_id == user_id,
+            CircleMember.status == "invited",
+        )
+    )
+
+
+@app.post("/circles/{circle_id}/membership/accept")
+def accept_membership(circle_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    member = pending_membership(db, circle_id, user.id)
+    if not member:
+        raise HTTPException(status_code=404, detail="You have no pending invitation for this circle")
+    member.status = "active"
+    log_activity(db, circle_id, user.id, "membership.accepted", "member", member.id)
+    db.commit()
+    circle = db.get(MemoryCircle, circle_id)
+    return serialize_circle(circle)
+
+
+@app.post("/circles/{circle_id}/membership/decline")
+def decline_membership(circle_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    member = pending_membership(db, circle_id, user.id)
+    if not member:
+        raise HTTPException(status_code=404, detail="You have no pending invitation for this circle")
+    member.status = "declined"
+    log_activity(db, circle_id, user.id, "membership.declined", "member", member.id)
+    db.commit()
+    return {"status": "declined"}
 
 
 @app.get("/circles/{circle_id}/members")

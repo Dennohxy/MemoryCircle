@@ -45,6 +45,9 @@ def setup_circle(client):
     approver = client.post("/auth/login", json={"email": "approver@test.com", "password": "ChangeMe123!"}).json()["token"]
     contributor = client.post("/auth/login", json={"email": "contributor@test.com", "password": "ChangeMe123!"}).json()["token"]
     viewer = client.post("/auth/login", json={"email": "viewer@test.com", "password": "ChangeMe123!"}).json()["token"]
+    # Owner-invited members start as pending; accept so they are active.
+    for token in (approver, contributor, viewer):
+        client.post(f"/circles/{circle['id']}/membership/accept", headers=auth(token))
     return circle["id"], owner, approver, contributor, viewer
 
 
@@ -475,3 +478,46 @@ def test_delete_memory_removes_it_from_the_album(client):
     # The album rebuilt without that photo, and the memory is gone.
     assert memory["id"] not in photo_ids()
     assert client.get(f"/circles/{circle_id}/memories/{memory['id']}", headers=auth(owner)).status_code == 404
+
+
+def test_invited_member_must_accept_before_access(client):
+    owner = register(client, "host@test.com", "Host")
+    circle = client.post("/circles", json={"name": "Host Circle"}, headers=auth(owner)).json()
+    circle_id = circle["id"]
+    newcomer = register(client, "guest@test.com", "Guest Gathoni")
+
+    # Owner adds the newcomer -> pending, not active.
+    invited = client.post(
+        f"/circles/{circle_id}/invites",
+        json={"email": "guest@test.com", "role": "contributor"},
+        headers=auth(owner),
+    )
+    assert invited.status_code == 200, invited.text
+    assert invited.json()["status"] == "invited"
+
+    # Before accepting: not in circle list, and no album/photo access.
+    assert all(c["id"] != circle_id for c in client.get("/circles", headers=auth(newcomer)).json())
+    assert client.get(f"/circles/{circle_id}/albums", headers=auth(newcomer)).status_code == 403
+
+    # The invitation shows up for the newcomer.
+    invites = client.get("/me/invitations", headers=auth(newcomer)).json()
+    assert any(i["circle_id"] == circle_id and i["inviter_name"] == "Host" for i in invites)
+
+    # Accept -> now a member with access.
+    accepted = client.post(f"/circles/{circle_id}/membership/accept", headers=auth(newcomer))
+    assert accepted.status_code == 200, accepted.text
+    assert any(c["id"] == circle_id for c in client.get("/circles", headers=auth(newcomer)).json())
+    assert client.get(f"/circles/{circle_id}/albums", headers=auth(newcomer)).status_code == 200
+    assert client.get("/me/invitations", headers=auth(newcomer)).json() == []
+
+
+def test_declined_invitation_stays_out(client):
+    owner = register(client, "host2@test.com", "Host Two")
+    circle_id = client.post("/circles", json={"name": "Host Two Circle"}, headers=auth(owner)).json()["id"]
+    newcomer = register(client, "guest2@test.com", "Guest Two")
+    client.post(f"/circles/{circle_id}/invites", json={"email": "guest2@test.com", "role": "viewer"}, headers=auth(owner))
+
+    declined = client.post(f"/circles/{circle_id}/membership/decline", headers=auth(newcomer))
+    assert declined.status_code == 200, declined.text
+    assert all(c["id"] != circle_id for c in client.get("/circles", headers=auth(newcomer)).json())
+    assert client.get("/me/invitations", headers=auth(newcomer)).json() == []

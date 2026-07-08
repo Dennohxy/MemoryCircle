@@ -244,6 +244,19 @@ class ApiClient {
   Future<void> declineJoinRequest(int circleId, int requestId) async =>
       _post('/circles/$circleId/join-requests/$requestId/decline');
 
+  // ---- Invitations (being added to a circle) ----
+
+  Future<List<Invitation>> myInvitations() async => [
+        for (final item in await _get('/me/invitations') as List<dynamic>)
+          Invitation.fromJson(item as Map<String, dynamic>),
+      ];
+
+  Future<void> acceptMembership(int circleId) async =>
+      _post('/circles/$circleId/membership/accept');
+
+  Future<void> declineMembership(int circleId) async =>
+      _post('/circles/$circleId/membership/decline');
+
   Future<Circle> updateCircle(
     int circleId, {
     String? name,

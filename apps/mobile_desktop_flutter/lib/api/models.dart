@@ -197,6 +197,31 @@ class JoinRequest {
   String get email => user?.email ?? '';
 }
 
+/// A pending invitation for the signed-in person to join a circle.
+class Invitation {
+  const Invitation({
+    required this.circleId,
+    required this.circleName,
+    required this.circleDescription,
+    required this.role,
+    required this.inviterName,
+  });
+
+  factory Invitation.fromJson(Map<String, dynamic> json) => Invitation(
+        circleId: _asInt(json['circle_id']),
+        circleName: _asText(json['circle_name']),
+        circleDescription: _asText(json['circle_description']),
+        role: CircleRole.fromApi(json['role'] as String?),
+        inviterName: _asText(json['inviter_name']),
+      );
+
+  final int circleId;
+  final String circleName;
+  final String circleDescription;
+  final CircleRole role;
+  final String inviterName;
+}
+
 class PhotoAsset {
   const PhotoAsset({
     required this.id,

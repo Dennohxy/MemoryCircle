@@ -115,7 +115,8 @@ class _MembersViewState extends State<MembersView> {
       if (!mounted) return;
       _refresh();
       messenger.showSnackBar(const SnackBar(
-        content: Text('They have been added to the circle.'),
+        content: Text('Invitation sent. They can accept it when they open '
+            'Memory Circle.'),
       ));
       await _shareInvite(input.email, input.name);
     } on ApiException catch (error) {
@@ -394,6 +395,12 @@ class _MembersViewState extends State<MembersView> {
                                   style: theme.textTheme.bodySmall
                                       ?.copyWith(color: AppColors.softInk),
                                 ),
+                              if (member.status == 'invited')
+                                Text(
+                                  'Invited · not joined yet',
+                                  style: theme.textTheme.labelSmall
+                                      ?.copyWith(color: AppColors.attention),
+                                ),
                             ],
                           ),
                         ),
@@ -594,7 +601,7 @@ class _FindPeopleDialogState extends State<_FindPeopleDialog> {
       setState(() => _added.add(person.user.id));
       messenger.showSnackBar(SnackBar(
         content: Text(
-            '${person.user.displayName} was added as a contributor. You can change their role anytime.'),
+            '${person.user.displayName} was invited as a contributor. They will join once they accept.'),
       ));
     } on ApiException catch (error) {
       messenger.showSnackBar(SnackBar(content: Text(error.message)));

@@ -8,6 +8,7 @@ import '../widgets/circle_card.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/error_state.dart';
 import '../widgets/loading_state.dart';
+import '../widgets/paper_card.dart';
 
 /// The list of memory circles the signed-in person belongs to.
 class CirclesScreen extends StatefulWidget {
@@ -26,24 +27,51 @@ class CirclesScreen extends StatefulWidget {
   State<CirclesScreen> createState() => _CirclesScreenState();
 }
 
+typedef _CirclesData = ({List<Circle> circles, List<Invitation> invitations});
+
 class _CirclesScreenState extends State<CirclesScreen> {
   bool _autoOpened = false;
-  late Future<List<Circle>> _circles = _load();
+  late Future<_CirclesData> _data = _load();
 
-  Future<List<Circle>> _load() async {
-    final circles = await widget.api.listCircles();
-    // With exactly one circle there is nothing to choose, so open it right
-    // away. Backing out still shows the list.
-    if (!_autoOpened && circles.length == 1 && mounted) {
+  Future<_CirclesData> _load() async {
+    final results = await Future.wait([
+      widget.api.listCircles(),
+      widget.api.myInvitations(),
+    ]);
+    final circles = results[0] as List<Circle>;
+    final invitations = results[1] as List<Invitation>;
+    // With exactly one circle and nothing pending there is nothing to choose,
+    // so open it right away. Backing out still shows the list.
+    if (!_autoOpened && circles.length == 1 && invitations.isEmpty && mounted) {
       _autoOpened = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _openCircle(circles.first);
       });
     }
-    return circles;
+    return (circles: circles, invitations: invitations);
   }
 
-  void _refresh() => setState(() => _circles = _load());
+  void _refresh() => setState(() => _data = _load());
+
+  Future<void> _answerInvitation(Invitation invite, bool accept) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      if (accept) {
+        await widget.api.acceptMembership(invite.circleId);
+      } else {
+        await widget.api.declineMembership(invite.circleId);
+      }
+      if (!mounted) return;
+      _refresh();
+      messenger.showSnackBar(SnackBar(
+        content: Text(accept
+            ? 'You joined "${invite.circleName}".'
+            : 'Invitation to "${invite.circleName}" was declined.'),
+      ));
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
 
   /// Opens the search dialog to find a circle by name and ask to join.
   Future<void> _findCircle() async {
@@ -146,8 +174,8 @@ class _CirclesScreenState extends State<CirclesScreen> {
         icon: const Icon(Icons.add),
         label: const Text('New circle'),
       ),
-      body: FutureBuilder<List<Circle>>(
-        future: _circles,
+      body: FutureBuilder<_CirclesData>(
+        future: _data,
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return ErrorState(
@@ -158,8 +186,9 @@ class _CirclesScreenState extends State<CirclesScreen> {
           if (!snapshot.hasData) {
             return const LoadingState(message: 'Opening your circles…');
           }
-          final circles = snapshot.data!;
-          if (circles.isEmpty) {
+          final circles = snapshot.data!.circles;
+          final invitations = snapshot.data!.invitations;
+          if (circles.isEmpty && invitations.isEmpty) {
             return EmptyState(
               icon: Icons.group_add_outlined,
               title: 'Start your first memory circle',
@@ -175,18 +204,34 @@ class _CirclesScreenState extends State<CirclesScreen> {
               child: ListView(
                 padding: const EdgeInsets.all(Insets.md),
                 children: [
-                  Text(
-                    'Choose a circle to open its albums and memories.',
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(color: AppColors.softInk),
-                  ),
-                  const SizedBox(height: Insets.md),
-                  for (final circle in circles) ...[
-                    CircleCard(
-                      circle: circle,
-                      onOpen: () => _openCircle(circle),
+                  for (final invite in invitations) ...[
+                    _InvitationCard(
+                      invitation: invite,
+                      onAccept: () => _answerInvitation(invite, true),
+                      onDecline: () => _answerInvitation(invite, false),
                     ),
                     const SizedBox(height: Insets.sm + Insets.xs),
+                  ],
+                  if (circles.isEmpty)
+                    Text(
+                      'You are not in any circles yet. Accept an invitation above, find a circle, or create your own.',
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(color: AppColors.softInk),
+                    )
+                  else ...[
+                    Text(
+                      'Choose a circle to open its albums and memories.',
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(color: AppColors.softInk),
+                    ),
+                    const SizedBox(height: Insets.md),
+                    for (final circle in circles) ...[
+                      CircleCard(
+                        circle: circle,
+                        onOpen: () => _openCircle(circle),
+                      ),
+                      const SizedBox(height: Insets.sm + Insets.xs),
+                    ],
                   ],
                   const SizedBox(height: 72),
                 ],
@@ -428,6 +473,61 @@ class _FindCircleDialogState extends State<_FindCircleDialog> {
           child: const Text('Done'),
         ),
       ],
+    );
+  }
+}
+
+/// A pending "you've been invited to a circle" card with Accept / Decline.
+class _InvitationCard extends StatelessWidget {
+  const _InvitationCard({
+    required this.invitation,
+    required this.onAccept,
+    required this.onDecline,
+  });
+
+  final Invitation invitation;
+  final VoidCallback onAccept;
+  final VoidCallback onDecline;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final role = invitation.role.label.toLowerCase();
+    return PaperCard(
+      color: AppColors.parchment,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.mark_email_unread_outlined,
+                  color: AppColors.deepGreen),
+              const SizedBox(width: Insets.sm),
+              Expanded(
+                child: Text('You have been invited',
+                    style: theme.textTheme.titleMedium),
+              ),
+            ],
+          ),
+          const SizedBox(height: Insets.sm),
+          Text(
+            invitation.inviterName.isEmpty
+                ? 'Join "${invitation.circleName}" as $role.'
+                : '${invitation.inviterName} invited you to "${invitation.circleName}" as $role.',
+            style:
+                theme.textTheme.bodyMedium?.copyWith(color: AppColors.softInk),
+          ),
+          const SizedBox(height: Insets.md),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(onPressed: onDecline, child: const Text('Decline')),
+              const SizedBox(width: Insets.sm),
+              FilledButton(onPressed: onAccept, child: const Text('Accept')),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
