@@ -4,9 +4,13 @@ import '../api/api_client.dart';
 import '../api/models.dart';
 import '../app/theme.dart';
 import 'authed_image.dart';
+import 'scrapbook_decor.dart';
 
-/// Renders one album page from its layout template:
-/// `event_title`, `one_photo_feature`, `two_photo_story`, `four_photo_grid`.
+/// Renders one album page from its layout template (`event_title`,
+/// `one_photo_feature`, `two_photo_story`, `four_photo_grid`) as a
+/// scrapbook page: torn-paper collage corners drawn in code behind the
+/// content, with photos styled as taped, white-framed prints. Each page
+/// keeps a stable look via a seed derived from the page itself.
 class AlbumPageView extends StatelessWidget {
   const AlbumPageView({
     super.key,
@@ -22,6 +26,9 @@ class AlbumPageView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final template = page.layout['template'] as String? ?? '';
+    final isTitle = template == 'event_title';
+    final seed = page.id * 131 + page.pageNumber * 7;
+    final palette = scrapbookPaletteFor(seed);
     return Container(
       decoration: BoxDecoration(
         gradient: const LinearGradient(
@@ -39,25 +46,46 @@ class AlbumPageView extends StatelessWidget {
           ),
         ],
       ),
-      padding: const EdgeInsets.fromLTRB(Insets.lg, Insets.lg, Insets.lg, 10),
-      child: Column(
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
         children: [
-          Expanded(
-            child: template == 'event_title'
-                ? _TitleLayout(layout: page.layout)
-                : _MemoriesLayout(api: api, layout: page.layout),
-          ),
-          if (showPageNumber)
-            Padding(
-              padding: const EdgeInsets.only(top: Insets.sm),
-              child: Text(
-                '${page.pageNumber}',
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: AppColors.softInk),
+          Positioned.fill(
+            child: CustomPaint(
+              painter: ScrapbookDecorPainter(
+                seed: seed,
+                palette: palette,
+                dense: isTitle,
               ),
             ),
+          ),
+          Padding(
+            padding:
+                const EdgeInsets.fromLTRB(Insets.lg, Insets.lg, Insets.lg, 10),
+            child: Column(
+              children: [
+                Expanded(
+                  child: isTitle
+                      ? _TitleLayout(layout: page.layout)
+                      : _MemoriesLayout(
+                          api: api,
+                          layout: page.layout,
+                          palette: palette,
+                        ),
+                ),
+                if (showPageNumber)
+                  Padding(
+                    padding: const EdgeInsets.only(top: Insets.sm),
+                    child: Text(
+                      '${page.pageNumber}',
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(color: AppColors.softInk),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -109,10 +137,15 @@ class _TitleLayout extends StatelessWidget {
 }
 
 class _MemoriesLayout extends StatelessWidget {
-  const _MemoriesLayout({required this.api, required this.layout});
+  const _MemoriesLayout({
+    required this.api,
+    required this.layout,
+    required this.palette,
+  });
 
   final ApiClient api;
   final Map<String, dynamic> layout;
+  final ScrapbookPalette palette;
 
   @override
   Widget build(BuildContext context) {
@@ -132,28 +165,44 @@ class _MemoriesLayout extends StatelessWidget {
       );
     }
     if (entries.length == 1) {
-      return _FeatureLayout(api: api, entry: entries.first);
+      return _FeatureLayout(api: api, entry: entries.first, palette: palette);
     }
-    if (entries.length == 2) return _PairLayout(api: api, entries: entries);
-    return _GridLayout(api: api, entries: entries);
+    if (entries.length == 2) {
+      return _PairLayout(api: api, entries: entries, palette: palette);
+    }
+    return _GridLayout(api: api, entries: entries, palette: palette);
   }
 }
 
-Widget _photo(ApiClient api, Map<String, dynamic> entry,
-    {bool thumbnail = false}) {
+/// Alternating small tilts so prints look casually placed, never crooked.
+const _printAngles = [-0.022, 0.018, -0.014, 0.024];
+
+Widget _photo(
+  ApiClient api,
+  Map<String, dynamic> entry,
+  int index,
+  ScrapbookPalette palette, {
+  bool thumbnail = false,
+}) {
   final path =
       entry[thumbnail ? 'thumbnail_url' : 'display_url'] as String? ?? '';
-  return ClipRRect(
-    borderRadius: BorderRadius.circular(8),
+  return FramedPhoto(
+    angle: _printAngles[index % _printAngles.length],
+    tapeTint: palette.accent,
     child: SizedBox.expand(child: AuthedImage(api: api, path: path)),
   );
 }
 
 class _FeatureLayout extends StatelessWidget {
-  const _FeatureLayout({required this.api, required this.entry});
+  const _FeatureLayout({
+    required this.api,
+    required this.entry,
+    required this.palette,
+  });
 
   final ApiClient api;
   final Map<String, dynamic> entry;
+  final ScrapbookPalette palette;
 
   @override
   Widget build(BuildContext context) {
@@ -161,7 +210,7 @@ class _FeatureLayout extends StatelessWidget {
     final story = entry['story_preview'] as String? ?? '';
     return Column(
       children: [
-        Expanded(child: _photo(api, entry)),
+        Expanded(child: _photo(api, entry, 0, palette)),
         const SizedBox(height: Insets.sm + Insets.xs),
         Text(
           entry['caption'] as String? ?? '',
@@ -187,10 +236,15 @@ class _FeatureLayout extends StatelessWidget {
 }
 
 class _PairLayout extends StatelessWidget {
-  const _PairLayout({required this.api, required this.entries});
+  const _PairLayout({
+    required this.api,
+    required this.entries,
+    required this.palette,
+  });
 
   final ApiClient api;
   final List<Map<String, dynamic>> entries;
+  final ScrapbookPalette palette;
 
   @override
   Widget build(BuildContext context) {
@@ -206,7 +260,7 @@ class _PairLayout extends StatelessWidget {
                 Expanded(
                   child: Column(
                     children: [
-                      Expanded(child: _photo(api, entries[i])),
+                      Expanded(child: _photo(api, entries[i], i, palette)),
                       const SizedBox(height: Insets.sm),
                       Text(
                         entries[i]['caption'] as String? ?? '',
@@ -239,18 +293,24 @@ class _PairLayout extends StatelessWidget {
 }
 
 class _GridLayout extends StatelessWidget {
-  const _GridLayout({required this.api, required this.entries});
+  const _GridLayout({
+    required this.api,
+    required this.entries,
+    required this.palette,
+  });
 
   final ApiClient api;
   final List<Map<String, dynamic>> entries;
+  final ScrapbookPalette palette;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    Widget cell(Map<String, dynamic> entry) => Column(
+    Widget cell(Map<String, dynamic> entry, int index) => Column(
           children: [
-            Expanded(child: _photo(api, entry, thumbnail: true)),
+            Expanded(
+                child: _photo(api, entry, index, palette, thumbnail: true)),
             const SizedBox(height: Insets.xs),
             Text(
               entry['caption'] as String? ?? '',
@@ -268,11 +328,11 @@ class _GridLayout extends StatelessWidget {
       rows.add(Expanded(
         child: Row(
           children: [
-            Expanded(child: cell(entries[i])),
+            Expanded(child: cell(entries[i], i)),
             const SizedBox(width: Insets.md),
             Expanded(
               child: i + 1 < entries.length
-                  ? cell(entries[i + 1])
+                  ? cell(entries[i + 1], i + 1)
                   : const SizedBox(),
             ),
           ],
