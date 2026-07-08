@@ -106,61 +106,61 @@ class _TitleLayout extends StatelessWidget {
     final cover = layout['cover'] as Map<String, dynamic>?;
     if (cover != null) {
       final aspect = (cover['aspect_ratio'] as num?)?.toDouble() ?? 1.0;
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          // A large hero cover: size to the photo's own aspect ratio (no crop,
-          // no letterbox), filling most of the page, then center the photo and
-          // title as a group so the margins are even all around.
-          final maxPhotoHeight = constraints.maxHeight * 0.68;
-          final maxPhotoWidth = constraints.maxWidth * 0.94;
-          var photoWidth = maxPhotoWidth;
-          var photoHeight = photoWidth / (aspect <= 0 ? 1.0 : aspect);
-          if (photoHeight > maxPhotoHeight) {
-            photoHeight = maxPhotoHeight;
-            photoWidth = photoHeight * (aspect <= 0 ? 1.0 : aspect);
-          }
-          return Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // A soft white print border so the photo reads as a placed
-              // keepsake rather than floating in the page.
-              Container(
-                width: photoWidth,
-                height: photoHeight,
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(10),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x22000000),
-                      blurRadius: 12,
-                      offset: Offset(0, 4),
+      // A large hero cover: the photo takes the upper band (sized to its own
+      // aspect ratio, so no crop and no letterbox) with a soft white print
+      // border; the title sits in the lower band. Using flex bands means the
+      // content can never overflow the page, whatever the photo's shape.
+      return Column(
+        children: [
+          Expanded(
+            flex: 64,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Insets.md),
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: aspect <= 0 ? 1.0 : aspect,
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(10),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x22000000),
+                          blurRadius: 12,
+                          offset: Offset(0, 4),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: ColoredBox(
-                    color: const Color(0xFFEFE8D8),
-                    child: AuthedImage(
-                      api: api,
-                      path: cover['display_url'] as String? ?? '',
-                      fit: BoxFit.contain,
-                      cacheWidth: 1400,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: ColoredBox(
+                        color: const Color(0xFFEFE8D8),
+                        child: AuthedImage(
+                          api: api,
+                          path: cover['display_url'] as String? ?? '',
+                          fit: BoxFit.contain,
+                          cacheWidth: 1400,
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
-              const SizedBox(height: Insets.lg),
-              _TitleBlock(
-                title: layout['title'] as String? ?? '',
-                description: description,
+            ),
+          ),
+          Expanded(
+            flex: 36,
+            child: Center(
+              child: SingleChildScrollView(
+                child: _TitleBlock(
+                  title: layout['title'] as String? ?? '',
+                  description: description,
+                ),
               ),
-            ],
-          );
-        },
+            ),
+          ),
+        ],
       );
     }
     return Column(
