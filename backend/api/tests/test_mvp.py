@@ -860,3 +860,28 @@ def test_album_keeps_a_real_caption(client):
         m for p in pages for m in p["layout_json"].get("memories", []) if m["memory_id"] == memory["id"]
     )
     assert entry["caption"] == "Grandma's 70th birthday"
+
+
+def test_photo_without_exif_still_gets_a_date_label(client):
+    # WhatsApp/downloaded images often have no capture date; the album should
+    # still show a date (falling back to when it was added) and stay sortable.
+    circle_id, owner, approver, _contributor, _viewer = setup_circle(client)
+    asset = client.post(
+        f"/circles/{circle_id}/assets/upload",
+        files={"file": ("1001158095.jpg", image_file(), "image/jpeg")},
+        headers=auth(owner),
+    ).json()
+    memory = client.post(
+        f"/circles/{circle_id}/memories",
+        json={"asset_id": asset["id"], "caption": "1001158095", "approval_status": "pending"},
+        headers=auth(owner),
+    ).json()
+    approve_all_reviewers(client, circle_id, memory["id"], owner, approver)
+    album = client.post(f"/circles/{circle_id}/albums", json={"title": "Our Memory Book"}, headers=auth(owner)).json()
+    client.post(f"/circles/{circle_id}/albums/{album['id']}/pages/generate", headers=auth(owner))
+    pages = client.get(f"/circles/{circle_id}/albums/{album['id']}", headers=auth(owner)).json()["pages"]
+    entry = next(m for p in pages for m in p["layout_json"].get("memories", []) if m["memory_id"] == memory["id"])
+    # The numeric filename caption is dropped and a real date is shown instead.
+    assert entry["caption"] == ""
+    assert entry["date_label"] != ""
+    assert "," in entry["date_label"]

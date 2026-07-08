@@ -178,7 +178,9 @@ class _BulkAddViewState extends State<BulkAddView> {
     if (title.isNotEmpty || albums.isEmpty) {
       final album = await widget.api.createAlbum(
         circleId,
-        title: title.isEmpty ? 'Family Album' : title,
+        // A neutral default: a circle may be friends, a team, or a class,
+        // not only a family.
+        title: title.isEmpty ? 'Our Memory Book' : title,
       );
       await widget.api.generateAlbumPages(circleId, album.id);
       return album;

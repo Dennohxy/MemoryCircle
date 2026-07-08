@@ -378,10 +378,6 @@ class _MosaicCell extends StatelessWidget {
     final ratio = (entry['aspect_ratio'] as num?)?.toDouble() ?? 1.0;
     final caption = entry['caption'] as String? ?? '';
     final dateLabel = entry['date_label'] as String? ?? '';
-    // Show the caption; when there isn't one, fall back to the date the photo
-    // was taken rather than a filename or nothing.
-    final label = caption.isNotEmpty ? caption : dateLabel;
-    final labelIsDate = caption.isEmpty && dateLabel.isNotEmpty;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -393,20 +389,33 @@ class _MosaicCell extends StatelessWidget {
             ),
           ),
         ),
-        if (label.isNotEmpty) ...[
+        // A caption, when written, sits above the date as the headline.
+        if (caption.isNotEmpty) ...[
           const SizedBox(height: Insets.sm),
           Text(
-            label,
-            style: labelIsDate
-                ? theme.textTheme.bodySmall?.copyWith(color: AppColors.softInk)
-                : (solo
-                    ? theme.textTheme.titleMedium
-                    : theme.textTheme.bodyMedium),
+            caption,
+            style:
+                solo ? theme.textTheme.titleMedium : theme.textTheme.bodyMedium,
             textAlign: TextAlign.center,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
           ),
         ],
+        // The date is always shown beneath each photo.
+        if (dateLabel.isNotEmpty) ...[
+          SizedBox(height: caption.isNotEmpty ? Insets.xs : Insets.sm),
+          Text(
+            dateLabel,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: AppColors.softInk,
+              letterSpacing: 0.3,
+            ),
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+        // The story, when written, is extra context on a single-photo page.
         if (solo && story.isNotEmpty) ...[
           const SizedBox(height: Insets.xs),
           Text(

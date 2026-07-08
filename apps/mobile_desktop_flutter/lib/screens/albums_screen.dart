@@ -1130,7 +1130,7 @@ class _CreateAlbumDialogState extends State<_CreateAlbumDialog> {
               autofocus: true,
               textInputAction: TextInputAction.next,
               decoration: appInput('Album title',
-                  hint: 'For example, "Family Highlights 2024"'),
+                  hint: 'For example, "Summer trip 2024"'),
             ),
             const SizedBox(height: Insets.md),
             TextField(

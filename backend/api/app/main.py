@@ -2055,10 +2055,21 @@ def is_placeholder_caption(caption: str) -> bool:
     return False
 
 
+def memory_effective_date(memory: MemoryItem) -> datetime:
+    """The date a photo belongs to for ordering and display: the memory's own
+    date, else the capture date read from the image, else when it was added
+    (many phone/chat images arrive with no capture date, so this keeps every
+    photo dated and sortable)."""
+    return (
+        memory.memory_date
+        or (memory.asset.capture_date if memory.asset else None)
+        or memory.created_at
+    )
+
+
 def memory_date_label(memory: MemoryItem) -> str:
-    """A friendly 'May 3, 2024' date for a photo, from its memory date or the
-    capture date read from the image, or '' if neither is known."""
-    when = memory.memory_date or (memory.asset.capture_date if memory.asset else None)
+    """A friendly 'May 3, 2024' date for a photo."""
+    when = memory_effective_date(memory)
     if not when:
         return ""
     return f"{_MONTH_NAMES[when.month - 1]} {when.day}, {when.year}"
@@ -2148,16 +2159,12 @@ def ordered_album_memories(db: Session, circle_id: int, album: Album):
     ).all()
     by_id = {memory.id: memory for memory in approved}
     sequence = json.loads(getattr(album, "memory_sequence_json", None) or "[]")
+    # Photos the family arranged by hand keep that order; everything else falls
+    # back to chronological order by the date the photo belongs to.
     ordered = [by_id[memory_id] for memory_id in sequence if memory_id in by_id]
     sequenced_ids = set(sequence)
     remaining = [memory for memory in approved if memory.id not in sequenced_ids]
-    remaining.sort(
-        key=lambda memory: (
-            memory.memory_date or (memory.asset.capture_date if memory.asset else None) or datetime.max,
-            memory.approved_at or datetime.max,
-            memory.created_at,
-        )
-    )
+    remaining.sort(key=lambda memory: (memory_effective_date(memory), memory.created_at))
     ordered.extend(remaining)
     cap = album_photo_cap(db, circle_id)
     # The cap still holds if members left after an explicit target was set.
