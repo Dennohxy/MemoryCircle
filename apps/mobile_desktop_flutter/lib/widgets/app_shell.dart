@@ -9,6 +9,7 @@ import '../screens/circle_dashboard_screen.dart';
 import '../screens/health_screen.dart';
 import '../screens/members_screen.dart';
 import '../screens/memories_review_screen.dart';
+import '../screens/photos_screen.dart';
 import '../screens/settings_screen.dart';
 import 'error_state.dart';
 import 'loading_state.dart';
@@ -18,6 +19,7 @@ enum CircleSection {
   overview,
   addMemory,
   bulkAdd,
+  photos,
   review,
   albums,
   members,
@@ -90,6 +92,11 @@ class _CircleShellState extends State<CircleShell> {
             label: 'Add a Whole Album',
             icon: Icons.photo_library_outlined
           ),
+        (
+          section: CircleSection.photos,
+          label: 'All Photos',
+          icon: Icons.collections_outlined
+        ),
         if (role.canReview)
           (
             section: CircleSection.review,
@@ -122,6 +129,7 @@ class _CircleShellState extends State<CircleShell> {
         CircleSection.overview => 'Overview',
         CircleSection.addMemory => 'Add a Memory',
         CircleSection.bulkAdd => 'Add a Whole Album',
+        CircleSection.photos => 'All Photos',
         CircleSection.review => 'Review Memories',
         CircleSection.albums => 'My Albums',
         CircleSection.members => 'Family Members',
@@ -147,6 +155,8 @@ class _CircleShellState extends State<CircleShell> {
             circle: _circle,
             role: role,
           ),
+        CircleSection.photos =>
+          PhotosView(api: widget.api, circle: _circle, role: role),
         CircleSection.review =>
           MemoriesReviewView(api: widget.api, circle: _circle),
         CircleSection.albums =>

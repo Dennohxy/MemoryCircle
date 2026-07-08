@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 import '../api/api_client.dart';
 import '../api/models.dart';
 import '../app/theme.dart';
+import '../widgets/authed_image.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/error_state.dart';
 import '../widgets/loading_state.dart';
@@ -45,7 +46,8 @@ class _AlbumsViewState extends State<AlbumsView> {
   }
 
   Future<void> _createAlbum() async {
-    final input = await showDialog<({String title, String description})>(
+    final input = await showDialog<
+        ({String title, String description, int? targetPhotoCount})>(
       context: context,
       builder: (_) => const _CreateAlbumDialog(),
     );
@@ -57,6 +59,7 @@ class _AlbumsViewState extends State<AlbumsView> {
         widget.circle.id,
         title: input.title,
         description: input.description,
+        targetPhotoCount: input.targetPhotoCount,
       );
       await widget.api.generateAlbumPages(widget.circle.id, album.id);
       if (!mounted) return;
@@ -102,7 +105,8 @@ class _AlbumsViewState extends State<AlbumsView> {
   }
 
   Future<void> _renameAlbum(Album album) async {
-    final input = await showDialog<({String title, String description})>(
+    final input = await showDialog<
+        ({String title, String description, int? targetPhotoCount})>(
       context: context,
       builder: (_) => _EditAlbumDialog(album: album),
     );
@@ -114,11 +118,41 @@ class _AlbumsViewState extends State<AlbumsView> {
         album.id,
         title: input.title,
         description: input.description,
+        targetPhotoCount: input.targetPhotoCount,
       );
       if (!mounted) return;
       _refresh();
       messenger.showSnackBar(
         const SnackBar(content: Text('Album details were updated.')),
+      );
+    } on ApiException catch (error) {
+      messenger.showSnackBar(SnackBar(content: Text(error.message)));
+    }
+  }
+
+  Future<void> _arrangeAlbum(Album album) async {
+    final input = await showDialog<({int? coverMemoryId, List<int> sequence})>(
+      context: context,
+      builder: (_) => _ArrangeAlbumDialog(
+        api: widget.api,
+        circle: widget.circle,
+        album: album,
+      ),
+    );
+    if (input == null || !mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await widget.api.updateAlbum(
+        widget.circle.id,
+        album.id,
+        coverMemoryId: input.coverMemoryId,
+        memorySequence: input.sequence,
+      );
+      await widget.api.generateAlbumPages(widget.circle.id, album.id);
+      if (!mounted) return;
+      _refresh();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Cover and photo order were updated.')),
       );
     } on ApiException catch (error) {
       messenger.showSnackBar(SnackBar(content: Text(error.message)));
@@ -305,6 +339,7 @@ class _AlbumsViewState extends State<AlbumsView> {
                             onOpen: () => _openAlbum(album),
                             onAddPhotos: () => _addPhotos(album),
                             onRename: () => _renameAlbum(album),
+                            onArrange: () => _arrangeAlbum(album),
                             onRegenerate: () => _regeneratePages(album),
                             onShare: () => _shareAlbum(album),
                             onManageShares: () => _manageSharePackages(album),
@@ -335,6 +370,7 @@ class _AlbumCover extends StatelessWidget {
     required this.onOpen,
     required this.onAddPhotos,
     required this.onRename,
+    required this.onArrange,
     required this.onRegenerate,
     required this.onShare,
     required this.onManageShares,
@@ -351,6 +387,7 @@ class _AlbumCover extends StatelessWidget {
   final VoidCallback onOpen;
   final VoidCallback onAddPhotos;
   final VoidCallback onRename;
+  final VoidCallback onArrange;
   final VoidCallback onRegenerate;
   final VoidCallback onShare;
   final VoidCallback onManageShares;
@@ -409,6 +446,12 @@ class _AlbumCover extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                         ),
                       ],
+                      const SizedBox(height: Insets.sm),
+                      Text(
+                        'Planned for ${album.targetPhotoCount} photos',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: AppColors.onBackdropFaded),
+                      ),
                       const Spacer(),
                       if (album.isPendingRemoval)
                         _removalBanner(theme)
@@ -452,6 +495,8 @@ class _AlbumCover extends StatelessWidget {
                           onRename();
                         case 'regenerate':
                           onRegenerate();
+                        case 'arrange':
+                          onArrange();
                         case 'remove':
                           onRequestRemoval();
                         case 'share':
@@ -465,6 +510,10 @@ class _AlbumCover extends StatelessWidget {
                         PopupMenuItem(
                           value: 'rename',
                           child: Text('Edit name and note'),
+                        ),
+                        PopupMenuItem(
+                          value: 'arrange',
+                          child: Text('Choose cover and order'),
                         ),
                         PopupMenuItem(
                           value: 'regenerate',
@@ -795,10 +844,170 @@ class _EditAlbumDialog extends StatefulWidget {
   State<_EditAlbumDialog> createState() => _EditAlbumDialogState();
 }
 
+class _ArrangeAlbumDialog extends StatefulWidget {
+  const _ArrangeAlbumDialog({
+    required this.api,
+    required this.circle,
+    required this.album,
+  });
+
+  final ApiClient api;
+  final Circle circle;
+  final Album album;
+
+  @override
+  State<_ArrangeAlbumDialog> createState() => _ArrangeAlbumDialogState();
+}
+
+class _ArrangeAlbumDialogState extends State<_ArrangeAlbumDialog> {
+  late Future<List<Memory>> _future =
+      widget.api.listMemories(widget.circle.id, status: 'approved');
+  final List<Memory> _ordered = [];
+  int? _coverMemoryId;
+  bool _initialized = false;
+
+  void _initialize(List<Memory> memories) {
+    if (_initialized) return;
+    final byId = {for (final memory in memories) memory.id: memory};
+    for (final memoryId in widget.album.memorySequence) {
+      final memory = byId[memoryId];
+      if (memory != null) _ordered.add(memory);
+    }
+    for (final memory in memories) {
+      if (!_ordered.any((item) => item.id == memory.id)) _ordered.add(memory);
+    }
+    _coverMemoryId = widget.album.coverMemoryId ??
+        (_ordered.isEmpty ? null : _ordered.first.id);
+    _initialized = true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Choose cover and order'),
+      content: SizedBox(
+        width: 520,
+        height: 560,
+        child: FutureBuilder<List<Memory>>(
+          future: _future,
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return ErrorState(
+                message: '${snapshot.error}',
+                onRetry: () => setState(() {
+                  _initialized = false;
+                  _ordered.clear();
+                  _future = widget.api
+                      .listMemories(widget.circle.id, status: 'approved');
+                }),
+              );
+            }
+            if (!snapshot.hasData) {
+              return const LoadingState(message: 'Loading approved photos...');
+            }
+            final memories = snapshot.data!;
+            if (memories.isEmpty) {
+              return const EmptyState(
+                icon: Icons.photo_outlined,
+                title: 'No approved photos yet',
+                message:
+                    'Once the family has approved photos, you can choose the cover and order here.',
+              );
+            }
+            _initialize(memories);
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                DropdownButtonFormField<int>(
+                  initialValue: _coverMemoryId,
+                  decoration: appInput('Cover photo'),
+                  items: [
+                    for (final memory in _ordered)
+                      DropdownMenuItem(
+                        value: memory.id,
+                        child: Text(
+                          memory.caption.isEmpty
+                              ? 'Untitled photo'
+                              : memory.caption,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                  ],
+                  onChanged: (value) => setState(() => _coverMemoryId = value),
+                ),
+                const SizedBox(height: Insets.md),
+                Text(
+                  'Drag photos into the order you want them to appear.',
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: AppColors.softInk),
+                ),
+                const SizedBox(height: Insets.sm),
+                Expanded(
+                  child: ReorderableListView.builder(
+                    itemCount: _ordered.length,
+                    onReorderItem: (oldIndex, newIndex) {
+                      setState(() {
+                        final item = _ordered.removeAt(oldIndex);
+                        _ordered.insert(newIndex, item);
+                      });
+                    },
+                    itemBuilder: (context, index) {
+                      final memory = _ordered[index];
+                      return ListTile(
+                        key: ValueKey(memory.id),
+                        leading: SizedBox(
+                          width: 52,
+                          height: 52,
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(6),
+                            child: AuthedImage(
+                              api: widget.api,
+                              path: memory.asset?.thumbnailUrl ?? '',
+                              fit: BoxFit.contain,
+                            ),
+                          ),
+                        ),
+                        title: Text(memory.caption.isEmpty
+                            ? 'Untitled photo'
+                            : memory.caption),
+                        subtitle: Text(memory.metaLine),
+                        trailing: const Icon(Icons.drag_handle),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _ordered.isEmpty
+              ? null
+              : () => Navigator.of(context).pop((
+                    coverMemoryId: _coverMemoryId,
+                    sequence: [for (final memory in _ordered) memory.id],
+                  )),
+          child: const Text('Save order'),
+        ),
+      ],
+    );
+  }
+}
+
 class _EditAlbumDialogState extends State<_EditAlbumDialog> {
   late final _titleController = TextEditingController(text: widget.album.title);
   late final _descriptionController =
       TextEditingController(text: widget.album.description);
+  late final _targetController =
+      TextEditingController(text: '${widget.album.targetPhotoCount}');
 
   @override
   void initState() {
@@ -810,6 +1019,7 @@ class _EditAlbumDialogState extends State<_EditAlbumDialog> {
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
+    _targetController.dispose();
     super.dispose();
   }
 
@@ -836,6 +1046,18 @@ class _EditAlbumDialogState extends State<_EditAlbumDialog> {
               maxLines: 3,
               decoration: appInput('A short note for the cover (optional)'),
             ),
+            const SizedBox(height: Insets.md),
+            TextField(
+              controller: _targetController,
+              keyboardType: TextInputType.number,
+              decoration: appInput(
+                'Planned number of photos',
+                helper: widget.album.maxPhotoCount == null
+                    ? 'Used when pages are generated.'
+                    : 'Family maximum: ${widget.album.maxPhotoCount} photos '
+                        '(12 per member).',
+              ),
+            ),
           ],
         ),
       ),
@@ -849,6 +1071,8 @@ class _EditAlbumDialogState extends State<_EditAlbumDialog> {
               ? () => Navigator.of(context).pop((
                     title: _titleController.text.trim(),
                     description: _descriptionController.text.trim(),
+                    targetPhotoCount:
+                        int.tryParse(_targetController.text.trim()),
                   ))
               : null,
           child: const Text('Save changes'),
@@ -868,6 +1092,7 @@ class _CreateAlbumDialog extends StatefulWidget {
 class _CreateAlbumDialogState extends State<_CreateAlbumDialog> {
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
+  final _targetController = TextEditingController();
 
   @override
   void initState() {
@@ -879,6 +1104,7 @@ class _CreateAlbumDialogState extends State<_CreateAlbumDialog> {
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
+    _targetController.dispose();
     super.dispose();
   }
 
@@ -913,6 +1139,16 @@ class _CreateAlbumDialogState extends State<_CreateAlbumDialog> {
               maxLines: 3,
               decoration: appInput('A short note for the cover (optional)'),
             ),
+            const SizedBox(height: Insets.md),
+            TextField(
+              controller: _targetController,
+              keyboardType: TextInputType.number,
+              decoration: appInput(
+                'Planned number of photos (optional)',
+                helper:
+                    'Leave empty for the family maximum: 12 photos per member.',
+              ),
+            ),
           ],
         ),
       ),
@@ -926,6 +1162,8 @@ class _CreateAlbumDialogState extends State<_CreateAlbumDialog> {
               ? () => Navigator.of(context).pop((
                     title: _titleController.text.trim(),
                     description: _descriptionController.text.trim(),
+                    targetPhotoCount:
+                        int.tryParse(_targetController.text.trim()),
                   ))
               : null,
           child: const Text('Create album'),

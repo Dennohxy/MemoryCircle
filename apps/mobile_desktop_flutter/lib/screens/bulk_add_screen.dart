@@ -132,9 +132,6 @@ class _BulkAddViewState extends State<BulkAddView> {
             assetId: asset.id,
             caption: _captionFrom(photo.file.name),
           );
-          if (widget.role.canReview && memory.approvalStatus != 'approved') {
-            memory = await widget.api.approveMemory(circleId, memory.id);
-          }
           memoryByAsset[asset.id] = memory;
           if (!mounted) return;
           setState(() {
@@ -158,6 +155,9 @@ class _BulkAddViewState extends State<BulkAddView> {
         setState(() => _processed++);
       }
 
+      if (_added + _reused > 0) {
+        await widget.api.sendUnapprovedPhotosForApproval(circleId);
+      }
       if (widget.role.canReview && _added + _reused > 0) {
         _openableAlbum = await _buildAlbum(circleId);
       }
@@ -347,8 +347,8 @@ class _BulkAddViewState extends State<BulkAddView> {
                         const SizedBox(height: Insets.sm),
                         Text(
                           widget.role.canReview
-                              ? 'They are in the album now. Anyone in the circle can open it, and captions can be edited from Review Memories.'
-                              : 'They were sent for review. A reviewer will add them to the album.',
+                              ? 'They were sent for family approval. Once everyone approves, you can update the album pages.'
+                              : 'They were sent for family approval. Everyone in the circle will be asked to approve them.',
                           style: theme.textTheme.bodyMedium
                               ?.copyWith(color: AppColors.softInk),
                         ),

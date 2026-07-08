@@ -109,6 +109,7 @@ class MemoryItem(Base):
     people_json: Mapped[str] = mapped_column(Text, default="[]")
     submitted_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     approval_status: Mapped[str] = mapped_column(String(60), default="draft", index=True)
+    approval_votes_json: Mapped[str] = mapped_column(Text, default="[]")
     approved_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
@@ -153,6 +154,10 @@ class Album(Base):
     title: Mapped[str] = mapped_column(String(220))
     description: Mapped[str] = mapped_column(Text, default="")
     template_key: Mapped[str] = mapped_column(String(100), default="classic")
+    # None means "use the family maximum" (12 photos per active member).
+    target_photo_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    cover_memory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("memory_items.id"), nullable=True)
+    memory_sequence_json: Mapped[str] = mapped_column(Text, default="[]")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     # Removal needs approval from all album managers; "active" or
     # "pending_removal". Votes hold the approving user ids.
@@ -193,6 +198,36 @@ class SharePackage(Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     viewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class NotificationSubscription(Base):
+    __tablename__ = "notification_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(60), default="local")
+    endpoint: Mapped[str] = mapped_column(String(500))
+    device_label: Mapped[str] = mapped_column(String(160), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    circle_id: Mapped[int] = mapped_column(ForeignKey("memory_circles.id"), index=True)
+    type: Mapped[str] = mapped_column(String(80))
+    title: Mapped[str] = mapped_column(String(220))
+    body: Mapped[str] = mapped_column(Text, default="")
+    target_type: Mapped[str] = mapped_column(String(80), default="")
+    target_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    delivery_status: Mapped[str] = mapped_column(String(60), default="queued")
+    read_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
 

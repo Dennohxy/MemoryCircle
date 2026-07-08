@@ -229,6 +229,7 @@ class PhotoAsset {
     required this.displayUrl,
     required this.originalFilename,
     this.contentHash = '',
+    this.captureDate,
   });
 
   factory PhotoAsset.fromJson(Map<String, dynamic> json) => PhotoAsset(
@@ -237,6 +238,7 @@ class PhotoAsset {
         displayUrl: _asText(json['display_url']),
         originalFilename: _asText(json['original_filename']),
         contentHash: _asText(json['content_hash']),
+        captureDate: _asDate(json['capture_date']),
       );
 
   final int id;
@@ -244,6 +246,84 @@ class PhotoAsset {
   final String displayUrl;
   final String originalFilename;
   final String contentHash;
+  final DateTime? captureDate;
+}
+
+class ApprovalSendResult {
+  const ApprovalSendResult({
+    required this.sent,
+    required this.alreadyPending,
+    required this.notificationsQueued,
+  });
+
+  factory ApprovalSendResult.fromJson(Map<String, dynamic> json) =>
+      ApprovalSendResult(
+        sent: _asInt(json['sent'] ?? 0),
+        alreadyPending: _asInt(json['already_pending'] ?? 0),
+        notificationsQueued: _asInt(json['notifications_queued'] ?? 0),
+      );
+
+  final int sent;
+  final int alreadyPending;
+  final int notificationsQueued;
+}
+
+class AppNotification {
+  const AppNotification({
+    required this.id,
+    required this.title,
+    required this.body,
+    required this.type,
+    this.circleId,
+    this.targetType = '',
+    this.targetId,
+    this.createdAt,
+  });
+
+  factory AppNotification.fromJson(Map<String, dynamic> json) =>
+      AppNotification(
+        id: _asInt(json['id']),
+        title: _asText(json['title']),
+        body: _asText(json['body']),
+        type: _asText(json['type']),
+        circleId: json['circle_id'] == null ? null : _asInt(json['circle_id']),
+        targetType: _asText(json['target_type']),
+        targetId: json['target_id'] == null ? null : _asInt(json['target_id']),
+        createdAt: _asDate(json['created_at']),
+      );
+
+  final int id;
+  final String title;
+  final String body;
+  final String type;
+  final int? circleId;
+  final String targetType;
+  final int? targetId;
+  final DateTime? createdAt;
+}
+
+class ApprovalProgress {
+  const ApprovalProgress({
+    required this.approvalsHave,
+    required this.approvalsNeeded,
+    required this.voterIds,
+  });
+
+  factory ApprovalProgress.fromJson(Map<String, dynamic>? json) =>
+      ApprovalProgress(
+        approvalsHave: _asInt(json?['approvals_have'] ?? 0),
+        approvalsNeeded: _asInt(json?['approvals_needed'] ?? 0),
+        voterIds: [
+          for (final id in json?['voter_ids'] as List<dynamic>? ?? const [])
+            _asInt(id),
+        ],
+      );
+
+  final int approvalsHave;
+  final int approvalsNeeded;
+  final List<int> voterIds;
+
+  bool hasVoted(int? userId) => userId != null && voterIds.contains(userId);
 }
 
 class Memory {
@@ -255,6 +335,7 @@ class Memory {
     required this.eventName,
     required this.locationText,
     required this.approvalStatus,
+    required this.approval,
     this.memoryDate,
     this.submittedBy,
     this.asset,
@@ -268,6 +349,8 @@ class Memory {
         eventName: _asText(json['event_name']),
         locationText: _asText(json['location_text']),
         approvalStatus: _asText(json['approval_status']),
+        approval: ApprovalProgress.fromJson(
+            json['approval'] as Map<String, dynamic>?),
         memoryDate: _asDate(json['memory_date']),
         submittedBy:
             json['submitted_by'] == null ? null : _asInt(json['submitted_by']),
@@ -283,6 +366,7 @@ class Memory {
   final String eventName;
   final String locationText;
   final String approvalStatus;
+  final ApprovalProgress approval;
   final DateTime? memoryDate;
   final int? submittedBy;
   final PhotoAsset? asset;
@@ -295,11 +379,29 @@ class Memory {
       ].where((part) => part.isNotEmpty).join(' · ');
 }
 
+class UploadedPhoto {
+  const UploadedPhoto({required this.asset, this.memory});
+
+  factory UploadedPhoto.fromJson(Map<String, dynamic> json) => UploadedPhoto(
+        asset: PhotoAsset.fromJson(json['asset'] as Map<String, dynamic>),
+        memory: json['memory'] == null
+            ? null
+            : Memory.fromJson(json['memory'] as Map<String, dynamic>),
+      );
+
+  final PhotoAsset asset;
+  final Memory? memory;
+}
+
 class Album {
   const Album({
     required this.id,
     required this.title,
     required this.description,
+    this.targetPhotoCount = 0,
+    this.maxPhotoCount,
+    this.coverMemoryId,
+    this.memorySequence = const [],
     this.status = 'active',
     this.removal,
     this.pages,
@@ -309,6 +411,19 @@ class Album {
         id: _asInt(json['id']),
         title: _asText(json['title']),
         description: _asText(json['description']),
+        targetPhotoCount:
+            _asInt(json['target_photo_count'] ?? json['max_photo_count'] ?? 0),
+        maxPhotoCount: json['max_photo_count'] == null
+            ? null
+            : _asInt(json['max_photo_count']),
+        coverMemoryId: json['cover_memory_id'] == null
+            ? null
+            : _asInt(json['cover_memory_id']),
+        memorySequence: [
+          for (final id
+              in json['memory_sequence'] as List<dynamic>? ?? const [])
+            _asInt(id),
+        ],
         status: _asText(json['status']).isEmpty
             ? 'active'
             : _asText(json['status']),
@@ -326,6 +441,14 @@ class Album {
   final int id;
   final String title;
   final String description;
+
+  /// Effective album size; the family maximum (12 per member) when unset.
+  final int targetPhotoCount;
+
+  /// Album size ceiling: 12 photos per active circle member.
+  final int? maxPhotoCount;
+  final int? coverMemoryId;
+  final List<int> memorySequence;
   final String status;
   final AlbumRemoval? removal;
   final List<AlbumPage>? pages;

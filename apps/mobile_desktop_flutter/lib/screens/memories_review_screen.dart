@@ -286,8 +286,11 @@ class _ReviewMemoryScreenState extends State<ReviewMemoryScreen> {
       String message;
       switch (action) {
         case 'approve':
-          await widget.api.approveMemory(circleId, memoryId, edits: _edits());
-          message = 'Added to the album.';
+          final updated = await widget.api
+              .approveMemory(circleId, memoryId, edits: _edits());
+          message = updated.approvalStatus == 'approved'
+              ? 'Everyone has approved this photo. It can enter the album.'
+              : 'Your approval was recorded. Waiting for the rest of the family.';
         case 'changes':
           await widget.api.requestChanges(circleId, memoryId);
           message = 'We let them know some changes are needed.';

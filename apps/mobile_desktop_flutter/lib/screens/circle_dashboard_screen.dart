@@ -166,18 +166,23 @@ class _CircleDashboardViewState extends State<CircleDashboardView> {
           subtitle: 'Bring in many photos at once',
           section: CircleSection.bulkAdd,
         ),
-      if (widget.role.canReview)
-        _ActionSpec(
-          icon: Icons.fact_check_outlined,
-          title: 'Review Memories',
-          subtitle: switch (glance?.pending) {
-            null => 'See what family has sent in',
-            0 => 'Nothing waiting right now',
-            1 => '1 memory waiting for review',
-            final n => '$n memories waiting for review',
-          },
-          section: CircleSection.review,
-        ),
+      const _ActionSpec(
+        icon: Icons.collections_outlined,
+        title: 'All Photos',
+        subtitle: 'See uploaded photos before they enter albums',
+        section: CircleSection.photos,
+      ),
+      _ActionSpec(
+        icon: Icons.fact_check_outlined,
+        title: 'Approve Photos',
+        subtitle: switch (glance?.pending) {
+          null => 'See what family has sent in',
+          0 => 'Nothing waiting right now',
+          1 => '1 memory waiting for family approval',
+          final n => '$n memories waiting for family approval',
+        },
+        section: CircleSection.photos,
+      ),
       const _ActionSpec(
         icon: Icons.auto_stories_outlined,
         title: 'Open My Albums',
