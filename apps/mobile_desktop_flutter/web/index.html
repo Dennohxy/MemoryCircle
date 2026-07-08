@@ -42,7 +42,7 @@
   <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
 
   <title>Omoide no Wa</title>
-  <link rel="manifest" href="site.webmanifest">
+  <link rel="manifest" href="manifest.json">
   <style>
     :root {
       --color-sun: #FFC857;
@@ -56,6 +56,49 @@
       --radius-lg: 24px;
       --shadow-soft: 0 12px 32px rgba(15, 27, 61, 0.12);
     }
+    #omoide-install {
+      position: fixed;
+      left: 50%;
+      bottom: 16px;
+      transform: translateX(-50%);
+      width: calc(100% - 24px);
+      max-width: 460px;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      background: #FFFDF7;
+      color: var(--color-navy);
+      border: 1px solid #ECE6D6;
+      border-radius: 16px;
+      box-shadow: var(--shadow-soft);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      z-index: 2147483647;
+    }
+    #omoide-install img { width: 40px; height: 40px; border-radius: 10px; flex: none; }
+    #omoide-install .oi-text { flex: 1; font-size: 14px; line-height: 1.35; }
+    #omoide-install .oi-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+    #omoide-install button {
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      border-radius: 999px;
+    }
+    #omoide-install .oi-install {
+      background: var(--color-orange);
+      color: #fff;
+      padding: 9px 16px;
+    }
+    #omoide-install .oi-close {
+      background: transparent;
+      color: var(--color-gray);
+      font-size: 20px;
+      line-height: 1;
+      padding: 6px 8px;
+    }
   </style>
 </head>
 <body>
@@ -68,5 +111,108 @@
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
   <script src="flutter_bootstrap.js" async></script>
+
+  <!--
+    Friendly "install this app" prompt. On Chrome/Edge/Android we capture the
+    browser's install event and offer a one-tap button; on iOS Safari (no such
+    event) we show the manual "Add to Home Screen" steps. It hides once the app
+    is installed, opened as an installed app, or dismissed.
+  -->
+  <script>
+    (function () {
+      var STORAGE_KEY = 'omoide_install_dismissed';
+      var deferredPrompt = null;
+
+      function isInstalled() {
+        return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+          window.navigator.standalone === true;
+      }
+      function isDismissed() {
+        try { return localStorage.getItem(STORAGE_KEY) === '1'; } catch (e) { return false; }
+      }
+      function remember() {
+        try { localStorage.setItem(STORAGE_KEY, '1'); } catch (e) {}
+      }
+      function remove() {
+        var el = document.getElementById('omoide-install');
+        if (el) el.remove();
+      }
+
+      var ja = (navigator.language || '').toLowerCase().indexOf('ja') === 0;
+      var copy = ja ? {
+        msg: 'ホーム画面に追加すると、アプリのように開けます。',
+        ios: '共有ボタンをタップして「ホーム画面に追加」を選んでください。',
+        install: 'インストール'
+      } : {
+        msg: 'Add Omoide no Wa to your home screen — it opens like an app.',
+        ios: 'Tap the Share button, then choose “Add to Home Screen”.',
+        install: 'Install app'
+      };
+
+      function showBanner(message, withButton) {
+        if (isInstalled() || isDismissed() || document.getElementById('omoide-install')) return;
+        var bar = document.createElement('div');
+        bar.id = 'omoide-install';
+
+        var icon = document.createElement('img');
+        icon.src = 'logo-mark-transparent.png';
+        icon.alt = '';
+        bar.appendChild(icon);
+
+        var text = document.createElement('div');
+        text.className = 'oi-text';
+        text.textContent = message;
+        bar.appendChild(text);
+
+        var actions = document.createElement('div');
+        actions.className = 'oi-actions';
+        if (withButton) {
+          var install = document.createElement('button');
+          install.className = 'oi-install';
+          install.textContent = copy.install;
+          install.addEventListener('click', function () {
+            if (!deferredPrompt) return;
+            deferredPrompt.prompt();
+            deferredPrompt.userChoice.then(function () {
+              deferredPrompt = null;
+              remove();
+            });
+          });
+          actions.appendChild(install);
+        }
+        var close = document.createElement('button');
+        close.className = 'oi-close';
+        close.setAttribute('aria-label', 'Dismiss');
+        close.textContent = '×';
+        close.addEventListener('click', function () { remember(); remove(); });
+        actions.appendChild(close);
+        bar.appendChild(actions);
+
+        document.body.appendChild(bar);
+      }
+
+      window.addEventListener('beforeinstallprompt', function (e) {
+        e.preventDefault();
+        deferredPrompt = e;
+        showBanner(copy.msg, true);
+      });
+
+      window.addEventListener('appinstalled', function () {
+        deferredPrompt = null;
+        remember();
+        remove();
+      });
+
+      window.addEventListener('DOMContentLoaded', function () {
+        var ua = navigator.userAgent || '';
+        var isIos = /iphone|ipad|ipod/i.test(ua) ||
+          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        var iosSafari = isIos && /safari/i.test(ua) && !/crios|fxios|edgios/i.test(ua);
+        if (iosSafari && !isInstalled() && !isDismissed()) {
+          setTimeout(function () { showBanner(copy.ios, false); }, 2500);
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
