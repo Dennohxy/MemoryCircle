@@ -2030,6 +2030,40 @@ def patch_album(circle_id: int, album_id: int, payload: AlbumPatch, db: Session 
     return serialize_album(album, max_photo_count=cap)
 
 
+_MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+_CAMERA_CAPTION_PREFIXES = (
+    "img", "dsc", "dscn", "pxl", "vid", "mov", "dcim", "screenshot",
+    "photo", "image", "whatsapp", "signal", "scaled",
+)
+
+
+def is_placeholder_caption(caption: str) -> bool:
+    """True when a caption is not a real, human-written one: empty, a camera
+    filename (IMG_1234, PXL_2024...), or a bare date/number blob. These should
+    fall back to the photo's date rather than show as an album caption."""
+    text = (caption or "").strip()
+    if not text:
+        return True
+    if text.lower().startswith(_CAMERA_CAPTION_PREFIXES):
+        return True
+    # No letters at all — e.g. "2024 05 03 123456".
+    if not any(char.isalpha() for char in text):
+        return True
+    return False
+
+
+def memory_date_label(memory: MemoryItem) -> str:
+    """A friendly 'May 3, 2024' date for a photo, from its memory date or the
+    capture date read from the image, or '' if neither is known."""
+    when = memory.memory_date or (memory.asset.capture_date if memory.asset else None)
+    if not when:
+        return ""
+    return f"{_MONTH_NAMES[when.month - 1]} {when.day}, {when.year}"
+
+
 def memory_entry(memory: MemoryItem) -> dict:
     """One photo's layout payload, including the orientation the client needs
     to give it a matching frame instead of letterboxing it."""
@@ -2047,10 +2081,14 @@ def memory_entry(memory: MemoryItem) -> dict:
         orientation = "portrait"
     else:
         orientation = "square"
+    # Camera-filename captions read as noise on an album page; drop them so the
+    # client shows the date instead.
+    caption = "" if is_placeholder_caption(memory.caption) else memory.caption
     return {
         "memory_id": memory.id,
         "asset_id": memory.asset_id,
-        "caption": memory.caption,
+        "caption": caption,
+        "date_label": memory_date_label(memory),
         "story_preview": memory.story[:220],
         "aspect_ratio": round(ratio, 4),
         "orientation": orientation,

@@ -811,3 +811,52 @@ def test_album_pages_match_photo_orientation(client):
     assert [m["memory_id"] for m in rows[1]["memories"]] == [port1, port2]
     assert all(m["orientation"] == "portrait" for m in rows[1]["memories"])
     assert all(m["aspect_ratio"] < 0.87 for m in rows[1]["memories"])
+
+
+def test_album_falls_back_to_photo_date_when_caption_is_a_filename(client):
+    circle_id, owner, approver, _contributor, _viewer = setup_circle(client)
+    # Upload with a capture date and a camera-filename-style caption.
+    asset = client.post(
+        f"/circles/{circle_id}/assets/upload",
+        files={"file": ("IMG_20240503.jpg", image_file(capture_date="2024:05:03 10:00:00"), "image/jpeg")},
+        headers=auth(owner),
+    ).json()
+    memory = client.post(
+        f"/circles/{circle_id}/memories",
+        json={"asset_id": asset["id"], "caption": "IMG 20240503 123456", "approval_status": "pending"},
+        headers=auth(owner),
+    ).json()
+    approve_all_reviewers(client, circle_id, memory["id"], owner, approver)
+
+    album = client.post(f"/circles/{circle_id}/albums", json={"title": "Dates"}, headers=auth(owner)).json()
+    client.post(f"/circles/{circle_id}/albums/{album['id']}/pages/generate", headers=auth(owner))
+    pages = client.get(f"/circles/{circle_id}/albums/{album['id']}", headers=auth(owner)).json()["pages"]
+
+    entry = next(
+        m for p in pages for m in p["layout_json"].get("memories", []) if m["memory_id"] == memory["id"]
+    )
+    # The filename caption is dropped; the date is offered as the label.
+    assert entry["caption"] == ""
+    assert entry["date_label"] == "May 3, 2024"
+
+
+def test_album_keeps_a_real_caption(client):
+    circle_id, owner, approver, _contributor, _viewer = setup_circle(client)
+    asset = client.post(
+        f"/circles/{circle_id}/assets/upload",
+        files={"file": ("p.jpg", image_file(), "image/jpeg")},
+        headers=auth(owner),
+    ).json()
+    memory = client.post(
+        f"/circles/{circle_id}/memories",
+        json={"asset_id": asset["id"], "caption": "Grandma's 70th birthday", "approval_status": "pending"},
+        headers=auth(owner),
+    ).json()
+    approve_all_reviewers(client, circle_id, memory["id"], owner, approver)
+    album = client.post(f"/circles/{circle_id}/albums", json={"title": "Real"}, headers=auth(owner)).json()
+    client.post(f"/circles/{circle_id}/albums/{album['id']}/pages/generate", headers=auth(owner))
+    pages = client.get(f"/circles/{circle_id}/albums/{album['id']}", headers=auth(owner)).json()["pages"]
+    entry = next(
+        m for p in pages for m in p["layout_json"].get("memories", []) if m["memory_id"] == memory["id"]
+    )
+    assert entry["caption"] == "Grandma's 70th birthday"

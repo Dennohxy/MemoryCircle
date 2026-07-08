@@ -84,13 +84,6 @@ class _BulkAddViewState extends State<BulkAddView> {
   }
 
   /// "IMG_2024-01_beach-day.jpg" -> "IMG 2024 01 beach day"
-  String _captionFrom(String filename) {
-    var name = filename;
-    final dot = name.lastIndexOf('.');
-    if (dot > 0) name = name.substring(0, dot);
-    return name.replaceAll(RegExp(r'[_\-]+'), ' ').trim();
-  }
-
   Future<void> _run() async {
     if (_photos.isEmpty || _running) return;
     final circleId = widget.circle.id;
@@ -127,10 +120,13 @@ class _BulkAddViewState extends State<BulkAddView> {
           final asset =
               matched ?? await widget.api.uploadPhoto(circleId, photo.file);
           var memory = memoryByAsset[asset.id];
+          // Leave the caption empty rather than inventing one from the camera
+          // filename; the album shows the photo's date until someone adds a
+          // real caption.
           memory ??= await widget.api.createMemory(
             circleId,
             assetId: asset.id,
-            caption: _captionFrom(photo.file.name),
+            caption: '',
           );
           memoryByAsset[asset.id] = memory;
           if (!mounted) return;

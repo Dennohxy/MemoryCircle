@@ -360,6 +360,11 @@ class _MosaicCell extends StatelessWidget {
     final story = entry['story_preview'] as String? ?? '';
     final ratio = (entry['aspect_ratio'] as num?)?.toDouble() ?? 1.0;
     final caption = entry['caption'] as String? ?? '';
+    final dateLabel = entry['date_label'] as String? ?? '';
+    // Show the caption; when there isn't one, fall back to the date the photo
+    // was taken rather than a filename or nothing.
+    final label = caption.isNotEmpty ? caption : dateLabel;
+    final labelIsDate = caption.isEmpty && dateLabel.isNotEmpty;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -371,12 +376,15 @@ class _MosaicCell extends StatelessWidget {
             ),
           ),
         ),
-        if (caption.isNotEmpty) ...[
+        if (label.isNotEmpty) ...[
           const SizedBox(height: Insets.sm),
           Text(
-            caption,
-            style:
-                solo ? theme.textTheme.titleMedium : theme.textTheme.bodyMedium,
+            label,
+            style: labelIsDate
+                ? theme.textTheme.bodySmall?.copyWith(color: AppColors.softInk)
+                : (solo
+                    ? theme.textTheme.titleMedium
+                    : theme.textTheme.bodyMedium),
             textAlign: TextAlign.center,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
