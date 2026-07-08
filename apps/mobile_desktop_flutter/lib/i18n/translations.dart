@@ -30,7 +30,7 @@ const translations = <AppLanguage, TranslationMap>{
       'account': 'Account',
     },
     'metadata': {
-      'title': 'OmoideNoWa - Memory Circle',
+      'title': 'Omoide no Wa — Shared memories, beautifully kept.',
       'description': 'Shared memories, beautifully kept.',
     },
     'nav': {
@@ -254,7 +254,7 @@ const translations = <AppLanguage, TranslationMap>{
       'account': 'アカウント',
     },
     'metadata': {
-      'title': 'OmoideNoWa - メモリーサークル',
+      'title': 'Omoide no Wa — 大切な思い出を、美しく残す。',
       'description': '大切な思い出を、美しく残す。',
     },
     'nav': {
