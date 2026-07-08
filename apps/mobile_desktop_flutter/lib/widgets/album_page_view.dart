@@ -100,29 +100,76 @@ class _TitleLayout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final description = layout['description'] as String? ?? '';
     final cover = layout['cover'] as Map<String, dynamic>?;
+    if (cover != null) {
+      final aspect = (cover['aspect_ratio'] as num?)?.toDouble() ?? 1.0;
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          // Size the cover to its own aspect ratio (so it fills the frame with
+          // no letterbox), capped to a share of the page. Then center the
+          // photo + title together so the whitespace above and below is even.
+          final maxPhotoHeight = constraints.maxHeight * 0.58;
+          final maxPhotoWidth = constraints.maxWidth * 0.86;
+          var photoWidth = maxPhotoWidth;
+          var photoHeight = photoWidth / (aspect <= 0 ? 1.0 : aspect);
+          if (photoHeight > maxPhotoHeight) {
+            photoHeight = maxPhotoHeight;
+            photoWidth = photoHeight * (aspect <= 0 ? 1.0 : aspect);
+          }
+          return Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              SizedBox(
+                width: photoWidth,
+                height: photoHeight,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: ColoredBox(
+                    color: const Color(0xFFEFE8D8),
+                    child: AuthedImage(
+                      api: api,
+                      path: cover['display_url'] as String? ?? '',
+                      fit: BoxFit.contain,
+                      cacheWidth: 1400,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: Insets.lg),
+              _TitleBlock(
+                title: layout['title'] as String? ?? '',
+                description: description,
+              ),
+            ],
+          );
+        },
+      );
+    }
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        if (cover != null) ...[
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: ColoredBox(
-                color: const Color(0xFFEFE8D8),
-                child: AuthedImage(
-                  api: api,
-                  path: cover['display_url'] as String? ?? '',
-                  fit: BoxFit.contain,
-                  cacheWidth: 1400,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: Insets.md),
-        ],
+        _TitleBlock(
+          title: layout['title'] as String? ?? '',
+          description: description,
+        ),
+      ],
+    );
+  }
+}
+
+class _TitleBlock extends StatelessWidget {
+  const _TitleBlock({required this.title, required this.description});
+
+  final String title;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
         Text(
           'MEMORY ALBUM',
           style: theme.textTheme.labelSmall?.copyWith(
@@ -133,7 +180,7 @@ class _TitleLayout extends StatelessWidget {
         ),
         const SizedBox(height: Insets.md),
         Text(
-          layout['title'] as String? ?? '',
+          title,
           style: theme.textTheme.headlineMedium,
           textAlign: TextAlign.center,
         ),
