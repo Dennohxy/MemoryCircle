@@ -51,12 +51,14 @@ const translations = <AppLanguage, TranslationMap>{
     },
     'hero': {
       'eyebrow': 'Memory Circle',
-      'title': 'A beautiful home for shared memories.',
+      'title': 'A private circle for the moments that still glow.',
       'subtitle':
-          'OmoideNoWa helps families, friends, and communities preserve photos, stories, and moments in one warm, organized space.',
+          'Gather photos, stories, and quiet fragments into albums shaped by the people who were there.',
       'primaryCta': 'Start your memory circle',
       'secondaryCta': 'Explore features',
-      'meaning': 'Omoide = memory. Wa = circle and harmony.',
+      'privacyCue': 'Private by design',
+      'approvalCue': 'Everyone has a voice',
+      'albumCue': 'Albums that feel kept',
     },
     'features': {
       'title': 'Preserve memories with care.',
@@ -113,6 +115,7 @@ const translations = <AppLanguage, TranslationMap>{
       'tagline': 'Shared memories, beautifully kept.',
     },
     'auth': {
+      'panelTitle': 'Enter your circle',
       'emailProblem': 'Enter the email address you use for Omoide no Wa.',
       'passwordProblem': 'Enter your password to continue.',
       'nameProblem':
@@ -272,11 +275,13 @@ const translations = <AppLanguage, TranslationMap>{
     },
     'hero': {
       'eyebrow': 'メモリーサークル',
-      'title': '共有する思い出に、美しい居場所を。',
-      'subtitle': 'OmoideNoWaは、家族や友人、コミュニティの写真・物語・大切な瞬間を、あたたかく整理して残せる場所です。',
+      'title': 'まだ光っている瞬間のための、静かな輪。',
+      'subtitle': '写真、物語、小さな断片を集めて、その場にいた人たちと一緒に美しいアルバムへ。',
       'primaryCta': 'メモリーサークルを始める',
       'secondaryCta': '機能を見る',
-      'meaning': 'Omoide は「思い出」、Wa は「輪」と「和」。',
+      'privacyCue': '非公開を前提に',
+      'approvalCue': 'みんなの声を大切に',
+      'albumCue': '残したくなるアルバム',
     },
     'features': {
       'title': '思い出を、丁寧に残す。',
@@ -323,6 +328,7 @@ const translations = <AppLanguage, TranslationMap>{
       'tagline': '大切な思い出を、美しく残す。',
     },
     'auth': {
+      'panelTitle': 'サークルへ入る',
       'emailProblem': 'Omoide no Waで使うメールアドレスを入力してください。',
       'passwordProblem': '続けるにはパスワードを入力してください。',
       'nameProblem': 'ご家族に分かるよう、お名前を入力してください。',
