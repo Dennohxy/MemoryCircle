@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../app/theme.dart';
+import '../i18n/index.dart';
 
 /// Centered spinner with a gentle message.
 class LoadingState extends StatelessWidget {
-  const LoadingState({super.key, this.message = 'Just a moment…'});
+  const LoadingState({super.key, this.message});
 
-  final String message;
+  final String? message;
 
   @override
   Widget build(BuildContext context) {
@@ -21,7 +22,7 @@ class LoadingState extends StatelessWidget {
           ),
           const SizedBox(height: Insets.md),
           Text(
-            message,
+            message ?? context.t('common.loading'),
             style: Theme.of(context)
                 .textTheme
                 .bodyMedium

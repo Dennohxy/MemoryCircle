@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app/theme.dart';
+import '../i18n/index.dart';
 
 /// Friendly error state with a retry action.
 class ErrorState extends StatelessWidget {
@@ -35,7 +36,7 @@ class ErrorState extends StatelessWidget {
               ),
               const SizedBox(height: Insets.md),
               Text(
-                'Something went wrong',
+                context.t('states.errorTitle'),
                 style: theme.textTheme.titleLarge,
                 textAlign: TextAlign.center,
               ),
@@ -51,7 +52,7 @@ class ErrorState extends StatelessWidget {
                 FilledButton.icon(
                   onPressed: onRetry,
                   icon: const Icon(Icons.refresh),
-                  label: const Text('Try again'),
+                  label: Text(context.t('common.retry')),
                 ),
               ],
             ],

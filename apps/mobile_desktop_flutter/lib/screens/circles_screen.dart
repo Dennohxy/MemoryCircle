@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../api/models.dart';
 import '../app/theme.dart';
+import '../i18n/index.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/circle_card.dart';
 import '../widgets/empty_state.dart';
@@ -65,8 +66,9 @@ class _CirclesScreenState extends State<CirclesScreen> {
       _refresh();
       messenger.showSnackBar(SnackBar(
         content: Text(accept
-            ? 'You joined "${invite.circleName}".'
-            : 'Invitation to "${invite.circleName}" was declined.'),
+            ? context.t('circles.joined', values: {'circle': invite.circleName})
+            : context
+                .t('circles.declined', values: {'circle': invite.circleName})),
       ));
     } on ApiException catch (error) {
       messenger.showSnackBar(SnackBar(content: Text(error.message)));
@@ -104,7 +106,7 @@ class _CirclesScreenState extends State<CirclesScreen> {
       if (!mounted) return;
       _refresh();
       messenger.showSnackBar(
-        const SnackBar(content: Text('Your circle is ready.')),
+        SnackBar(content: Text(context.t('circles.ready'))),
       );
       await _openCircle(circle);
     } on ApiException catch (error) {
@@ -117,15 +119,19 @@ class _CirclesScreenState extends State<CirclesScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('My Memory Circles'),
+        title: Text(context.t('circles.title')),
         actions: [
+          const Padding(
+            padding: EdgeInsets.only(right: Insets.sm),
+            child: LanguageSelector(compact: true),
+          ),
           IconButton(
-            tooltip: 'Find a circle',
+            tooltip: context.t('circles.find'),
             icon: const Icon(Icons.travel_explore),
             onPressed: _findCircle,
           ),
           PopupMenuButton<String>(
-            tooltip: 'Account',
+            tooltip: context.t('common.account'),
             onSelected: (value) {
               if (value == 'signout') widget.onSignOut();
             },
@@ -143,13 +149,13 @@ class _CirclesScreenState extends State<CirclesScreen> {
                 ),
               ),
               const PopupMenuDivider(),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'signout',
                 child: Row(
                   children: [
-                    Icon(Icons.logout, size: 18),
-                    SizedBox(width: Insets.sm),
-                    Text('Sign out'),
+                    const Icon(Icons.logout, size: 18),
+                    const SizedBox(width: Insets.sm),
+                    Text(context.t('common.signOut')),
                   ],
                 ),
               ),
@@ -172,7 +178,7 @@ class _CirclesScreenState extends State<CirclesScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _createCircle,
         icon: const Icon(Icons.add),
-        label: const Text('New circle'),
+        label: Text(context.t('circles.newCircle')),
       ),
       body: FutureBuilder<_CirclesData>(
         future: _data,
@@ -184,17 +190,16 @@ class _CirclesScreenState extends State<CirclesScreen> {
             );
           }
           if (!snapshot.hasData) {
-            return const LoadingState(message: 'Opening your circles…');
+            return LoadingState(message: context.t('circles.opening'));
           }
           final circles = snapshot.data!.circles;
           final invitations = snapshot.data!.invitations;
           if (circles.isEmpty && invitations.isEmpty) {
             return EmptyState(
               icon: Icons.group_add_outlined,
-              title: 'Start your first memory circle',
-              message:
-                  'A memory circle is a private space where your family gathers photos and stories into a shared album.',
-              actionLabel: 'Create a circle',
+              title: context.t('circles.emptyTitle'),
+              message: context.t('circles.emptyMessage'),
+              actionLabel: context.t('circles.create'),
               onAction: _createCircle,
             );
           }
@@ -214,13 +219,13 @@ class _CirclesScreenState extends State<CirclesScreen> {
                   ],
                   if (circles.isEmpty)
                     Text(
-                      'You are not in any circles yet. Accept an invitation above, find a circle, or create your own.',
+                      context.t('circles.noneYet'),
                       style: theme.textTheme.bodyMedium
                           ?.copyWith(color: AppColors.softInk),
                     )
                   else ...[
                     Text(
-                      'Choose a circle to open its albums and memories.',
+                      context.t('circles.choose'),
                       style: theme.textTheme.bodyMedium
                           ?.copyWith(color: AppColors.softInk),
                     ),
@@ -273,14 +278,14 @@ class _CreateCircleDialogState extends State<_CreateCircleDialog> {
     final theme = Theme.of(context);
     final canCreate = _nameController.text.trim().isNotEmpty;
     return AlertDialog(
-      title: const Text('Create a memory circle'),
+      title: Text(context.t('circles.createTitle')),
       content: SizedBox(
         width: 380,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'Give your circle a name your family will recognize.',
+              context.t('circles.createHelp'),
               style:
                   theme.textTheme.bodySmall?.copyWith(color: AppColors.softInk),
             ),
@@ -289,15 +294,17 @@ class _CreateCircleDialogState extends State<_CreateCircleDialog> {
               controller: _nameController,
               autofocus: true,
               textInputAction: TextInputAction.next,
-              decoration: appInput('Circle name',
-                  hint: 'For example, "The Otieno Family"'),
+              decoration: appInput(
+                context.t('circles.nameLabel'),
+                hint: context.t('circles.nameHint'),
+              ),
             ),
             const SizedBox(height: Insets.md),
             TextField(
               controller: _descriptionController,
               minLines: 2,
               maxLines: 3,
-              decoration: appInput('What is this circle about? (optional)'),
+              decoration: appInput(context.t('circles.descriptionLabel')),
             ),
           ],
         ),
@@ -305,7 +312,7 @@ class _CreateCircleDialogState extends State<_CreateCircleDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          child: Text(context.t('common.cancel')),
         ),
         FilledButton(
           onPressed: canCreate
@@ -314,7 +321,7 @@ class _CreateCircleDialogState extends State<_CreateCircleDialog> {
                     description: _descriptionController.text.trim(),
                   ))
               : null,
-          child: const Text('Create circle'),
+          child: Text(context.t('circles.create')),
         ),
       ],
     );
@@ -359,7 +366,8 @@ class _FindCircleDialogState extends State<_FindCircleDialog> {
       setState(() => _requested.add(circle.id));
       messenger.showSnackBar(SnackBar(
         content: Text(
-            'Your request to join "${circle.name}" was sent. The circle owner will decide.'),
+          context.t('circles.requestSent', values: {'circle': circle.name}),
+        ),
       ));
     } on ApiException catch (error) {
       messenger.showSnackBar(SnackBar(content: Text(error.message)));
@@ -372,7 +380,7 @@ class _FindCircleDialogState extends State<_FindCircleDialog> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return AlertDialog(
-      title: const Text('Find a circle'),
+      title: Text(context.t('circles.findTitle')),
       content: SizedBox(
         width: 440,
         child: Column(
@@ -383,7 +391,7 @@ class _FindCircleDialogState extends State<_FindCircleDialog> {
               autofocus: true,
               onChanged: _onQueryChanged,
               decoration: appInput(
-                'Search by circle name',
+                context.t('circles.searchLabel'),
                 prefixIcon: const Icon(Icons.search),
               ),
             ),
@@ -393,7 +401,7 @@ class _FindCircleDialogState extends State<_FindCircleDialog> {
               child: _results == null
                   ? Center(
                       child: Text(
-                        'Type at least two letters to find a family circle to join.',
+                        context.t('circles.searchHelp'),
                         style: theme.textTheme.bodySmall
                             ?.copyWith(color: AppColors.softInk),
                         textAlign: TextAlign.center,
@@ -406,13 +414,14 @@ class _FindCircleDialogState extends State<_FindCircleDialog> {
                           return ErrorState(message: '${snapshot.error}');
                         }
                         if (!snapshot.hasData) {
-                          return const LoadingState(message: 'Searching…');
+                          return LoadingState(
+                              message: context.t('circles.searching'));
                         }
                         final circles = snapshot.data!;
                         if (circles.isEmpty) {
                           return Center(
                             child: Text(
-                              'No circles matched that name.',
+                              context.t('circles.noMatches'),
                               style: theme.textTheme.bodySmall
                                   ?.copyWith(color: AppColors.softInk),
                               textAlign: TextAlign.center,
@@ -429,11 +438,12 @@ class _FindCircleDialogState extends State<_FindCircleDialog> {
                                 _requested.contains(circle.id);
                             final Widget trailing;
                             if (circle.isMember) {
-                              trailing = Text('Joined',
+                              trailing = Text(
+                                  context.t('circles.alreadyJoined'),
                                   style: theme.textTheme.bodySmall
                                       ?.copyWith(color: AppColors.softInk));
                             } else if (requested) {
-                              trailing = Text('Requested',
+                              trailing = Text(context.t('circles.requested'),
                                   style: theme.textTheme.bodySmall
                                       ?.copyWith(color: AppColors.softInk));
                             } else if (_requestingId == circle.id) {
@@ -446,7 +456,7 @@ class _FindCircleDialogState extends State<_FindCircleDialog> {
                             } else {
                               trailing = FilledButton(
                                 onPressed: () => _request(circle),
-                                child: const Text('Request'),
+                                child: Text(context.t('circles.request')),
                               );
                             }
                             return ListTile(
@@ -470,7 +480,7 @@ class _FindCircleDialogState extends State<_FindCircleDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('Done'),
+          child: Text(context.t('common.done')),
         ),
       ],
     );
@@ -492,7 +502,7 @@ class _InvitationCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final role = invitation.role.label.toLowerCase();
+    final role = invitation.role.localizedLabel(context).toLowerCase();
     return PaperCard(
       color: AppColors.parchment,
       child: Column(
@@ -504,7 +514,7 @@ class _InvitationCard extends StatelessWidget {
                   color: AppColors.deepGreen),
               const SizedBox(width: Insets.sm),
               Expanded(
-                child: Text('You have been invited',
+                child: Text(context.t('circles.invitedTitle'),
                     style: theme.textTheme.titleMedium),
               ),
             ],
@@ -512,8 +522,13 @@ class _InvitationCard extends StatelessWidget {
           const SizedBox(height: Insets.sm),
           Text(
             invitation.inviterName.isEmpty
-                ? 'Join "${invitation.circleName}" as $role.'
-                : '${invitation.inviterName} invited you to "${invitation.circleName}" as $role.',
+                ? context.t('circles.inviteJoin',
+                    values: {'circle': invitation.circleName, 'role': role})
+                : context.t('circles.inviteFrom', values: {
+                    'inviter': invitation.inviterName,
+                    'circle': invitation.circleName,
+                    'role': role,
+                  }),
             style:
                 theme.textTheme.bodyMedium?.copyWith(color: AppColors.softInk),
           ),
@@ -521,9 +536,13 @@ class _InvitationCard extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              TextButton(onPressed: onDecline, child: const Text('Decline')),
+              TextButton(
+                  onPressed: onDecline,
+                  child: Text(context.t('circles.decline'))),
               const SizedBox(width: Insets.sm),
-              FilledButton(onPressed: onAccept, child: const Text('Accept')),
+              FilledButton(
+                  onPressed: onAccept,
+                  child: Text(context.t('circles.accept'))),
             ],
           ),
         ],

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../api/models.dart';
 import '../app/theme.dart';
+import '../i18n/index.dart';
 import '../widgets/paper_card.dart';
 
 /// Circle settings: owners can rename the circle and update its
@@ -56,8 +57,8 @@ class _SettingsViewState extends State<SettingsView> {
       );
       if (!mounted) return;
       widget.onUpdated(updated);
-      messenger.showSnackBar(
-          const SnackBar(content: Text('Your changes were saved.')));
+      messenger
+          .showSnackBar(SnackBar(content: Text(context.t('settings.saved'))));
     } on ApiException catch (error) {
       messenger.showSnackBar(SnackBar(content: Text(error.message)));
     } finally {
@@ -82,19 +83,20 @@ class _SettingsViewState extends State<SettingsView> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Text('About this circle',
+                        Text(context.t('settings.about'),
                             style: theme.textTheme.titleLarge),
                         const SizedBox(height: Insets.md),
                         TextField(
                           controller: _nameController,
-                          decoration: appInput('Circle name'),
+                          decoration: appInput(context.t('circles.nameLabel')),
                         ),
                         const SizedBox(height: Insets.md),
                         TextField(
                           controller: _descriptionController,
                           minLines: 2,
                           maxLines: 4,
-                          decoration: appInput('What is this circle about?'),
+                          decoration:
+                              appInput(context.t('circles.descriptionLabel')),
                         ),
                         const SizedBox(height: Insets.md),
                         Align(
@@ -111,7 +113,7 @@ class _SettingsViewState extends State<SettingsView> {
                                     child: CircularProgressIndicator(
                                         strokeWidth: 2, color: Colors.white),
                                   )
-                                : const Text('Save changes'),
+                                : Text(context.t('settings.saveChanges')),
                           ),
                         ),
                       ],
@@ -134,7 +136,7 @@ class _SettingsViewState extends State<SettingsView> {
                         ],
                         const SizedBox(height: Insets.sm),
                         Text(
-                          'Only the circle owner can change these details.',
+                          context.t('settings.ownerOnly'),
                           style: theme.textTheme.bodySmall
                               ?.copyWith(color: AppColors.softInk),
                         ),
@@ -146,10 +148,11 @@ class _SettingsViewState extends State<SettingsView> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('More to come', style: theme.textTheme.titleMedium),
+                      Text(context.t('settings.moreToCome'),
+                          style: theme.textTheme.titleMedium),
                       const SizedBox(height: Insets.xs),
                       Text(
-                        'Options for invitations, archiving, and privacy will live here as Omoide no Wa grows.',
+                        context.t('settings.moreText'),
                         style: theme.textTheme.bodyMedium
                             ?.copyWith(color: AppColors.softInk),
                       ),

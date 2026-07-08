@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
 import '../api/models.dart';
+import '../app/theme.dart';
+import '../i18n/index.dart';
 import '../screens/add_memory_screen.dart';
 import '../screens/albums_screen.dart';
 import '../screens/bulk_add_screen.dart';
@@ -77,64 +79,64 @@ class _CircleShellState extends State<CircleShell> {
       [
         (
           section: CircleSection.overview,
-          label: 'Overview',
+          label: context.t('nav.overview'),
           icon: Icons.cottage_outlined
         ),
         if (role.canContribute)
           (
             section: CircleSection.addMemory,
-            label: 'Add a Memory',
+            label: context.t('nav.addMemory'),
             icon: Icons.add_photo_alternate_outlined
           ),
         if (role.canContribute)
           (
             section: CircleSection.bulkAdd,
-            label: 'Add a Whole Album',
+            label: context.t('nav.bulkAdd'),
             icon: Icons.photo_library_outlined
           ),
         (
           section: CircleSection.photos,
-          label: 'All Photos',
+          label: context.t('nav.photos'),
           icon: Icons.collections_outlined
         ),
         if (role.canReview)
           (
             section: CircleSection.review,
-            label: 'Review Memories',
+            label: context.t('nav.review'),
             icon: Icons.fact_check_outlined
           ),
         (
           section: CircleSection.albums,
-          label: 'My Albums',
+          label: context.t('nav.albums'),
           icon: Icons.auto_stories_outlined
         ),
         (
           section: CircleSection.members,
-          label: 'Family Members',
+          label: context.t('nav.members'),
           icon: Icons.group_outlined
         ),
         (
           section: CircleSection.health,
-          label: 'Album Health',
+          label: context.t('nav.health'),
           icon: Icons.favorite_border
         ),
         (
           section: CircleSection.settings,
-          label: 'Settings',
+          label: context.t('nav.settings'),
           icon: Icons.tune_outlined
         ),
       ];
 
   String _titleFor(CircleSection section) => switch (section) {
-        CircleSection.overview => 'Overview',
-        CircleSection.addMemory => 'Add a Memory',
-        CircleSection.bulkAdd => 'Add a Whole Album',
-        CircleSection.photos => 'All Photos',
-        CircleSection.review => 'Review Memories',
-        CircleSection.albums => 'My Albums',
-        CircleSection.members => 'Family Members',
-        CircleSection.health => 'Album Health',
-        CircleSection.settings => 'Settings',
+        CircleSection.overview => context.t('nav.overview'),
+        CircleSection.addMemory => context.t('nav.addMemory'),
+        CircleSection.bulkAdd => context.t('nav.bulkAdd'),
+        CircleSection.photos => context.t('nav.photos'),
+        CircleSection.review => context.t('nav.review'),
+        CircleSection.albums => context.t('nav.albums'),
+        CircleSection.members => context.t('nav.members'),
+        CircleSection.health => context.t('nav.health'),
+        CircleSection.settings => context.t('nav.settings'),
       };
 
   Widget _sectionBody(CircleSection section, CircleRole role) =>
@@ -209,15 +211,31 @@ class _CircleShellState extends State<CircleShell> {
     }
     if (role == null) {
       return Scaffold(
-        appBar: AppBar(title: Text(_circle.name)),
-        body: const LoadingState(message: 'Opening your circle…'),
+        appBar: AppBar(
+          title: Text(_circle.name),
+          actions: const [
+            Padding(
+              padding: EdgeInsets.only(right: Insets.sm),
+              child: LanguageSelector(compact: true),
+            ),
+          ],
+        ),
+        body: LoadingState(message: context.t('circles.openingOne')),
       );
     }
 
     final width = MediaQuery.sizeOf(context).width;
     if (width < 960) {
       return Scaffold(
-        appBar: AppBar(title: Text(_circle.name)),
+        appBar: AppBar(
+          title: Text(_circle.name),
+          actions: const [
+            Padding(
+              padding: EdgeInsets.only(right: Insets.sm),
+              child: LanguageSelector(compact: true),
+            ),
+          ],
+        ),
         body: CircleDashboardView(
           api: widget.api,
           circle: _circle,
@@ -235,7 +253,15 @@ class _CircleShellState extends State<CircleShell> {
     final extended = width >= 1240;
 
     return Scaffold(
-      appBar: AppBar(title: Text(_circle.name)),
+      appBar: AppBar(
+        title: Text(_circle.name),
+        actions: const [
+          Padding(
+            padding: EdgeInsets.only(right: Insets.sm),
+            child: LanguageSelector(compact: true),
+          ),
+        ],
+      ),
       body: Row(
         children: [
           NavigationRail(

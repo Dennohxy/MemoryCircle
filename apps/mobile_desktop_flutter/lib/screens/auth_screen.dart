@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../api/models.dart';
 import '../app/theme.dart';
+import '../i18n/index.dart';
 import '../widgets/paper_card.dart';
 
 /// Sign in / create account screen.
@@ -55,11 +56,11 @@ class _AuthScreenState extends State<AuthScreen> {
 
     String? problem;
     if (_registerMode && name.isEmpty) {
-      problem = 'Please tell us your name so your family knows who you are.';
+      problem = context.t('auth.nameProblem');
     } else if (email.isEmpty || !email.contains('@')) {
-      problem = 'Enter the email address you use for Omoide no Wa.';
+      problem = context.t('auth.emailProblem');
     } else if (password.isEmpty) {
-      problem = 'Enter your password to continue.';
+      problem = context.t('auth.passwordProblem');
     }
     if (problem != null) {
       setState(() => _error = problem);
@@ -79,9 +80,8 @@ class _AuthScreenState extends State<AuthScreen> {
     } on ApiException catch (error) {
       if (!mounted) return;
       setState(() => _error = switch (error.statusCode) {
-            401 =>
-              'That email and password did not match. Double-check them, or create an account if you are new here.',
-            409 => 'That email already has an account. Try signing in instead.',
+            401 => context.t('auth.badCredentials'),
+            409 => context.t('auth.emailExists'),
             _ => error.message,
           });
     } finally {
@@ -112,6 +112,11 @@ class _AuthScreenState extends State<AuthScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  const Align(
+                    alignment: Alignment.centerRight,
+                    child: LanguageSelector(),
+                  ),
+                  const SizedBox(height: Insets.md),
                   _brand(theme),
                   const SizedBox(height: Insets.xl),
                   PaperCard(
@@ -120,11 +125,15 @@ class _AuthScreenState extends State<AuthScreen> {
                       children: [
                         Center(
                           child: SegmentedButton<bool>(
-                            segments: const [
+                            segments: [
                               ButtonSegment(
-                                  value: false, label: Text('Sign in')),
+                                value: false,
+                                label: Text(context.t('common.signIn')),
+                              ),
                               ButtonSegment(
-                                  value: true, label: Text('Create account')),
+                                value: true,
+                                label: Text(context.t('common.createAccount')),
+                              ),
                             ],
                             selected: {_registerMode},
                             onSelectionChanged: _busy
@@ -141,8 +150,10 @@ class _AuthScreenState extends State<AuthScreen> {
                           TextField(
                             controller: _nameController,
                             textInputAction: TextInputAction.next,
-                            decoration: appInput('Your name',
-                                hint: 'How your family knows you'),
+                            decoration: appInput(
+                              context.t('common.yourName'),
+                              hint: context.t('auth.nameHint'),
+                            ),
                           ),
                           const SizedBox(height: Insets.md),
                         ],
@@ -151,7 +162,7 @@ class _AuthScreenState extends State<AuthScreen> {
                           keyboardType: TextInputType.emailAddress,
                           textInputAction: TextInputAction.next,
                           autocorrect: false,
-                          decoration: appInput('Email'),
+                          decoration: appInput(context.t('common.email')),
                         ),
                         const SizedBox(height: Insets.md),
                         TextField(
@@ -159,10 +170,11 @@ class _AuthScreenState extends State<AuthScreen> {
                           obscureText: _obscure,
                           onSubmitted: (_) => _busy ? null : _submit(),
                           decoration: appInput(
-                            'Password',
+                            context.t('common.password'),
                             suffixIcon: IconButton(
-                              tooltip:
-                                  _obscure ? 'Show password' : 'Hide password',
+                              tooltip: _obscure
+                                  ? context.t('auth.showPassword')
+                                  : context.t('auth.hidePassword'),
                               icon: Icon(_obscure
                                   ? Icons.visibility_outlined
                                   : Icons.visibility_off_outlined),
@@ -211,13 +223,16 @@ class _AuthScreenState extends State<AuthScreen> {
                                       strokeWidth: 2, color: Colors.white),
                                 )
                               : Text(
-                                  _registerMode ? 'Create account' : 'Sign in'),
+                                  _registerMode
+                                      ? context.t('common.createAccount')
+                                      : context.t('common.signIn'),
+                                ),
                         ),
                         const SizedBox(height: Insets.sm),
                         Text(
                           _registerMode
-                              ? 'Create an account to start your family\'s circle.'
-                              : 'Sign in to open your family albums.',
+                              ? context.t('auth.createAccountHelp')
+                              : context.t('auth.signInHelp'),
                           style: theme.textTheme.bodySmall
                               ?.copyWith(color: AppColors.softInk),
                           textAlign: TextAlign.center,
@@ -229,7 +244,7 @@ class _AuthScreenState extends State<AuthScreen> {
                   TextButton(
                     onPressed: _busy ? null : _fillDemoAccount,
                     child: Text(
-                      'Use the demo family account',
+                      context.t('auth.demoAccount'),
                       style: theme.textTheme.bodySmall
                           ?.copyWith(color: AppColors.softInk),
                     ),
@@ -264,16 +279,17 @@ class _AuthScreenState extends State<AuthScreen> {
           ),
         ),
         const SizedBox(height: Insets.md),
-        Text('Omoide no Wa', style: theme.textTheme.displaySmall),
+        Text(context.t('common.displayName'),
+            style: theme.textTheme.displaySmall),
         const SizedBox(height: Insets.sm),
         Text(
-          'Shared memories, beautifully kept.',
+          context.t('common.tagline'),
           style: theme.textTheme.bodyMedium?.copyWith(color: AppColors.softInk),
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: Insets.xs),
         Text(
-          'Omoide = memory. Wa = circle and harmony.',
+          context.t('hero.meaning'),
           style: theme.textTheme.bodySmall?.copyWith(color: AppColors.softInk),
           textAlign: TextAlign.center,
         ),

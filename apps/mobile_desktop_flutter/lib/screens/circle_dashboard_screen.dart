@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../api/models.dart';
 import '../app/theme.dart';
+import '../i18n/index.dart';
 import '../widgets/app_shell.dart';
 import '../widgets/paper_card.dart';
 
@@ -63,8 +64,10 @@ class _CircleDashboardViewState extends State<CircleDashboardView> {
 
   void _refresh() => setState(() => _glance = _load());
 
-  String _count(int number, String singular, String plural) =>
-      number == 1 ? '1 $singular' : '$number $plural';
+  String _countKey(int number, String singularKey, String pluralKey) =>
+      number == 1
+          ? context.t(singularKey)
+          : context.t(pluralKey, values: {'count': number});
 
   @override
   Widget build(BuildContext context) {
@@ -84,12 +87,13 @@ class _CircleDashboardViewState extends State<CircleDashboardView> {
                   children: [
                     _header(theme),
                     const SizedBox(height: Insets.lg),
-                    Text('What would you like to do?',
+                    Text(context.t('dashboard.whatNext'),
                         style: theme.textTheme.titleLarge),
                     const SizedBox(height: Insets.sm + Insets.xs),
                     _actions(glance),
                     const SizedBox(height: Insets.lg),
-                    Text('At a glance', style: theme.textTheme.titleLarge),
+                    Text(context.t('dashboard.atGlance'),
+                        style: theme.textTheme.titleLarge),
                     const SizedBox(height: Insets.sm + Insets.xs),
                     _glancePanel(theme, glance),
                     const SizedBox(height: Insets.lg),
@@ -131,7 +135,9 @@ class _CircleDashboardViewState extends State<CircleDashboardView> {
                     border: Border.all(color: AppColors.outline),
                   ),
                   child: Text(
-                    'You are the ${widget.role.label.toLowerCase()} of this circle',
+                    context.t('dashboard.roleLine', values: {
+                      'role': widget.role.localizedLabel(context).toLowerCase(),
+                    }),
                     style: theme.textTheme.bodySmall
                         ?.copyWith(color: AppColors.deepGreen),
                   ),
@@ -140,7 +146,7 @@ class _CircleDashboardViewState extends State<CircleDashboardView> {
             ),
           ),
           IconButton(
-            tooltip: 'Refresh',
+            tooltip: context.t('common.refresh'),
             onPressed: _refresh,
             icon: const Icon(Icons.refresh, color: AppColors.softInk),
           ),
@@ -152,47 +158,47 @@ class _CircleDashboardViewState extends State<CircleDashboardView> {
   Widget _actions(_Glance? glance) {
     final actions = <_ActionSpec>[
       if (widget.role.canContribute)
-        const _ActionSpec(
+        _ActionSpec(
           icon: Icons.add_photo_alternate_outlined,
-          title: 'Add a Memory',
-          subtitle: 'Share a photo and the story behind it',
+          title: context.t('nav.addMemory'),
+          subtitle: context.t('dashboard.addMemorySubtitle'),
           section: CircleSection.addMemory,
           emphasized: true,
         ),
       if (widget.role.canContribute)
-        const _ActionSpec(
+        _ActionSpec(
           icon: Icons.photo_library_outlined,
-          title: 'Add a Whole Album',
-          subtitle: 'Bring in many photos at once',
+          title: context.t('nav.bulkAdd'),
+          subtitle: context.t('dashboard.bulkAddSubtitle'),
           section: CircleSection.bulkAdd,
         ),
-      const _ActionSpec(
+      _ActionSpec(
         icon: Icons.collections_outlined,
-        title: 'All Photos',
-        subtitle: 'See uploaded photos before they enter albums',
+        title: context.t('nav.photos'),
+        subtitle: context.t('dashboard.photosSubtitle'),
         section: CircleSection.photos,
       ),
       _ActionSpec(
         icon: Icons.fact_check_outlined,
-        title: 'Approve Photos',
+        title: context.t('dashboard.approvePhotos'),
         subtitle: switch (glance?.pending) {
-          null => 'See what family has sent in',
-          0 => 'Nothing waiting right now',
-          1 => '1 memory waiting for family approval',
-          final n => '$n memories waiting for family approval',
+          null => context.t('dashboard.pendingUnknown'),
+          0 => context.t('dashboard.pendingNone'),
+          1 => context.t('dashboard.pendingOne'),
+          final n => context.t('dashboard.pendingMany', values: {'count': n}),
         },
         section: CircleSection.photos,
       ),
-      const _ActionSpec(
+      _ActionSpec(
         icon: Icons.auto_stories_outlined,
-        title: 'Open My Albums',
-        subtitle: 'Flip through the family album',
+        title: context.t('albums.openAlbums'),
+        subtitle: context.t('albums.flipThrough'),
         section: CircleSection.albums,
       ),
-      const _ActionSpec(
+      _ActionSpec(
         icon: Icons.group_outlined,
-        title: 'Family Members',
-        subtitle: 'See who is in this circle',
+        title: context.t('nav.members'),
+        subtitle: context.t('dashboard.membersSubtitle'),
         section: CircleSection.members,
       ),
     ];
@@ -222,16 +228,16 @@ class _CircleDashboardViewState extends State<CircleDashboardView> {
 
   Widget _glancePanel(ThemeData theme, _Glance? glance) {
     if (glance == null) {
-      return const PaperCard(
+      return PaperCard(
         child: Row(
           children: [
-            SizedBox(
+            const SizedBox(
               width: 18,
               height: 18,
               child: CircularProgressIndicator(strokeWidth: 2),
             ),
-            SizedBox(width: Insets.md),
-            Text('Checking on your circle…'),
+            const SizedBox(width: Insets.md),
+            Text(context.t('dashboard.checking')),
           ],
         ),
       );
@@ -264,25 +270,26 @@ class _CircleDashboardViewState extends State<CircleDashboardView> {
           row(
             Icons.photo_library_outlined,
             glance.approved == null
-                ? 'We could not count the album memories right now.'
-                : _count(glance.approved!, 'memory in the album',
-                    'memories in the album'),
+                ? context.t('dashboard.countAlbumFailed')
+                : _countKey(glance.approved!, 'dashboard.memoryInAlbumOne',
+                    'dashboard.memoryInAlbumMany'),
           ),
           row(
             Icons.hourglass_empty,
             switch (glance.pending) {
-              null => 'We could not check for waiting memories right now.',
-              0 => 'Nothing waiting for review',
-              final int n => _count(n, 'memory waiting for review',
-                  'memories waiting for review'),
+              null => context.t('dashboard.countPendingFailed'),
+              0 => context.t('dashboard.nothingForReview'),
+              final int n => _countKey(n, 'dashboard.memoryWaitingOne',
+                  'dashboard.memoryWaitingMany'),
             },
           ),
           row(
             Icons.menu_book_outlined,
             switch (glance.albums) {
-              null => 'We could not count the albums right now.',
-              0 => 'No albums yet',
-              final int n => _count(n, 'album created', 'albums created'),
+              null => context.t('dashboard.countAlbumsFailed'),
+              0 => context.t('dashboard.noAlbums'),
+              final int n =>
+                _countKey(n, 'dashboard.albumOne', 'dashboard.albumMany'),
             },
           ),
           row(
@@ -292,11 +299,13 @@ class _CircleDashboardViewState extends State<CircleDashboardView> {
                     ? Icons.check_circle_outline
                     : Icons.error_outline),
             health == null
-                ? 'We could not check photo health right now.'
+                ? context.t('dashboard.healthFailed')
                 : (health.healthy
-                    ? 'All display photos are ready'
-                    : _count(health.missingCount, 'photo needs attention',
-                        'photos need attention')),
+                    ? context.t('dashboard.healthReady')
+                    : _countKey(
+                        health.missingCount,
+                        'dashboard.photoAttentionOne',
+                        'dashboard.photoAttentionMany')),
             color: health == null
                 ? AppColors.softInk
                 : (health.healthy ? AppColors.success : AppColors.attention),

@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:memory_circle/app/memory_circle_app.dart';
+import 'package:memory_circle/i18n/index.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -34,6 +35,23 @@ void main() {
       find.text('Create an account to start your family\'s circle.'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('manual language switch updates copy and persists',
+      (tester) async {
+    await tester.pumpWidget(const MemoryCircleApp());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('English'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('日本語').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('大切な思い出を、美しく残す。'), findsOneWidget);
+    expect(find.text('ログイン'), findsWidgets);
+
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getString(languageStorageKey), 'ja');
   });
 
   testWidgets('a saved session skips the sign-in screen', (tester) async {

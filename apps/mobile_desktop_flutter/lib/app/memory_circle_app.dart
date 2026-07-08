@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
 import '../api/models.dart';
+import '../i18n/index.dart';
 import '../screens/auth_screen.dart';
 import '../screens/circles_screen.dart';
 import 'push_notifications.dart';
@@ -21,6 +22,7 @@ class MemoryCircleApp extends StatefulWidget {
 
 class _MemoryCircleAppState extends State<MemoryCircleApp> {
   final ApiClient _api = ApiClient();
+  final I18nController _i18n = I18nController();
   late final PushNotifications _pushNotifications = PushNotifications(_api);
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   final GlobalKey<ScaffoldMessengerState> _messengerKey =
@@ -42,6 +44,7 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
     _api.onSessionExpired = _sessionExpired;
     final token = Uri.base.queryParameters['join'];
     if (token != null && token.isNotEmpty) _pendingJoinToken = token;
+    unawaited(_i18n.load());
     _restoreSession();
   }
 
@@ -75,11 +78,12 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
       if (!mounted) return;
       setState(() => _circlesReloadKey++);
       _messengerKey.currentState?.showSnackBar(SnackBar(
-        content: Text('You joined "${circle.name}"!'),
+        content:
+            Text(_i18n.t('circles.joined', values: {'circle': circle.name})),
       ));
     } on ApiException {
-      _messengerKey.currentState?.showSnackBar(const SnackBar(
-        content: Text('That invite link is no longer active.'),
+      _messengerKey.currentState?.showSnackBar(SnackBar(
+        content: Text(_i18n.t('circles.inviteInactive')),
       ));
     }
   }
@@ -91,8 +95,8 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
     _api.signOut();
     _navigatorKey.currentState?.popUntil((route) => route.isFirst);
     setState(() => _user = null);
-    _messengerKey.currentState?.showSnackBar(const SnackBar(
-      content: Text('Welcome back! Please sign in again to continue.'),
+    _messengerKey.currentState?.showSnackBar(SnackBar(
+      content: Text(_i18n.t('circles.sessionExpired')),
     ));
   }
 
@@ -104,30 +108,36 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
   @override
   void dispose() {
     _pushNotifications.dispose();
+    _i18n.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Omoide no Wa',
-      debugShowCheckedModeBanner: false,
-      theme: buildAppTheme(),
-      navigatorKey: _navigatorKey,
-      scaffoldMessengerKey: _messengerKey,
-      home: !_ready
-          ? const _SplashScreen()
-          : _user == null
-              ? AuthScreen(
-                  api: _api,
-                  onSignedIn: _onSignedIn,
-                )
-              : CirclesScreen(
-                  key: ValueKey(_circlesReloadKey),
-                  api: _api,
-                  user: _user!,
-                  onSignOut: _signOut,
-                ),
+    return I18nScope(
+      controller: _i18n,
+      child: Builder(
+        builder: (context) => MaterialApp(
+          title: context.t('metadata.title'),
+          debugShowCheckedModeBanner: false,
+          theme: buildAppTheme(),
+          navigatorKey: _navigatorKey,
+          scaffoldMessengerKey: _messengerKey,
+          home: !_ready
+              ? const _SplashScreen()
+              : _user == null
+                  ? AuthScreen(
+                      api: _api,
+                      onSignedIn: _onSignedIn,
+                    )
+                  : CirclesScreen(
+                      key: ValueKey(_circlesReloadKey),
+                      api: _api,
+                      user: _user!,
+                      onSignOut: _signOut,
+                    ),
+        ),
+      ),
     );
   }
 }
