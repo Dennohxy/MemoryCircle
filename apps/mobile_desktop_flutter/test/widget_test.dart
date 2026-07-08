@@ -11,9 +11,9 @@ void main() {
     await tester.pumpWidget(const MemoryCircleApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('Memory Circle'), findsOneWidget);
+    expect(find.text('Omoide no Wa'), findsOneWidget);
     expect(
-      find.text('A quiet home for your family\'s photos and stories.'),
+      find.text('Shared memories, beautifully kept.'),
       findsOneWidget,
     );
     expect(find.text('Sign in'), findsWidgets);

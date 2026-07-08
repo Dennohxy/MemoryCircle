@@ -1,1 +1,1 @@
-"""Memory Circle API package."""
+"""Omoide no Wa API package."""

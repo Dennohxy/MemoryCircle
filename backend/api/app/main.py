@@ -51,7 +51,7 @@ WRITE_ROLES = {"owner", "approver", "contributor"}
 APPROVE_ROLES = {"owner", "approver"}
 FIRST_VIEW_ASSET_GRACE = timedelta(minutes=30)
 
-app = FastAPI(title="Memory Circle API", version="0.1.0")
+app = FastAPI(title="Omoide no Wa API", version="0.1.0")
 
 # The Flutter web client is served from a different local port, so browsers
 # send CORS preflight requests that must be answered here.

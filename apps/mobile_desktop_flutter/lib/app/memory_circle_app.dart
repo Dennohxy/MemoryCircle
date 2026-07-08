@@ -110,7 +110,7 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Memory Circle',
+      title: 'Omoide no Wa',
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(),
       navigatorKey: _navigatorKey,
@@ -150,7 +150,7 @@ class _SplashScreen extends StatelessWidget {
                 gradient: LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
-                  colors: [AppColors.deepGreen, AppColors.forest],
+                  colors: [AppColors.orange, AppColors.magenta],
                 ),
               ),
               child: const Icon(

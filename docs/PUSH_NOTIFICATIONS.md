@@ -1,6 +1,6 @@
 # Push Notifications
 
-Memory Circle uses Firebase Cloud Messaging (FCM) for provider push delivery.
+Omoide no Wa uses Firebase Cloud Messaging (FCM) for provider push delivery.
 The app also stores in-app notification records, so approval workflows still
 work when Firebase is not configured.
 
@@ -18,7 +18,7 @@ the stable project ID even though the display name is `omoidenowa`.
 ## Firebase Project
 
 1. Open Firebase Console.
-2. Create or select the Memory Circle project.
+2. Create or select the Omoide no Wa project.
 3. Add a Web app for the current Flutter web build.
 4. Add Android/iOS apps later if native platform folders are generated.
 

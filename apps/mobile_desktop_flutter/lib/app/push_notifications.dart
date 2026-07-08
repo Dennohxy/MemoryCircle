@@ -7,7 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../api/api_client.dart';
 import '../firebase_options.dart';
 
-/// FCM setup for Memory Circle.
+/// FCM setup for Omoide no Wa.
 ///
 /// This is intentionally tolerant: until Firebase project config is added with
 /// `flutterfire configure`, initialization fails quietly and the app continues

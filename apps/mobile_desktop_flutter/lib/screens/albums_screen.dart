@@ -187,7 +187,7 @@ class _AlbumsViewState extends State<AlbumsView> {
       if (!mounted) return;
       await Share.share(
         package.shareUrl,
-        subject: 'MemoryCircle album: ${package.title}',
+        subject: 'Omoide no Wa album: ${package.title}',
       );
       messenger.showSnackBar(const SnackBar(
         content: Text('Share package created. You can revoke it anytime.'),
@@ -805,7 +805,7 @@ class _SharePackagesDialogState extends State<_SharePackagesDialog> {
                               ? () => Share.share(
                                     package.shareUrl,
                                     subject:
-                                        'MemoryCircle album: ${package.title}',
+                                        'Omoide no Wa album: ${package.title}',
                                   )
                               : null,
                         ),

@@ -149,7 +149,7 @@ class _SettingsViewState extends State<SettingsView> {
                       Text('More to come', style: theme.textTheme.titleMedium),
                       const SizedBox(height: Insets.xs),
                       Text(
-                        'Options for invitations, archiving, and privacy will live here as Memory Circle grows.',
+                        'Options for invitations, archiving, and privacy will live here as Omoide no Wa grows.',
                         style: theme.textTheme.bodyMedium
                             ?.copyWith(color: AppColors.softInk),
                       ),

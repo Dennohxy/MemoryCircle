@@ -1,23 +1,31 @@
 import 'package:flutter/material.dart';
 
-/// Memory Circle design tokens: warm paper surfaces, deep green primary,
-/// ink text, and soft rust/gold accents.
+/// Omoide no Wa design tokens: warm photo surfaces, navy trust,
+/// and sun-to-magenta memory accents.
 abstract final class AppColors {
-  static const ivory = Color(0xFFF7F2E7);
+  static const sun = Color(0xFFFFC857);
+  static const orange = Color(0xFFFF8A3D);
+  static const coral = Color(0xFFFF5E7D);
+  static const magenta = Color(0xFFD94DBB);
+  static const violet = Color(0xFF7A5AF8);
+  static const navy = Color(0xFF0F1B3D);
+  static const gray = Color(0xFF6B7280);
+
+  static const ivory = Color(0xFFF8F7F4);
   static const paper = Color(0xFFFFFDF6);
-  static const parchment = Color(0xFFFDF6E7);
-  static const deepGreen = Color(0xFF386641);
-  static const forest = Color(0xFF2A4A32);
-  static const ink = Color(0xFF262419);
-  static const softInk = Color(0xFF6E6857);
-  static const rust = Color(0xFFB85C38);
-  static const gold = Color(0xFFC9A227);
-  static const outline = Color(0xFFE6DEC9);
-  static const success = Color(0xFF3E7C4F);
-  static const attention = Color(0xFFB07D1F);
+  static const parchment = Color(0xFFFFF4DC);
+  static const deepGreen = navy;
+  static const forest = Color(0xFF172A5A);
+  static const ink = navy;
+  static const softInk = gray;
+  static const rust = coral;
+  static const gold = sun;
+  static const outline = Color(0xFFE5E1D8);
+  static const success = Color(0xFF2F8F6B);
+  static const attention = orange;
 
   /// Dim viewing-room backdrop behind the flip album.
-  static const backdrop = Color(0xFF2E2B24);
+  static const backdrop = Color(0xFF090F24);
 
   /// Light text colors used on the [backdrop].
   static const onBackdrop = Color(0xFFF3EDDF);

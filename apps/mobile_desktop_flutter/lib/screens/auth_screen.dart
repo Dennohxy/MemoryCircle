@@ -57,7 +57,7 @@ class _AuthScreenState extends State<AuthScreen> {
     if (_registerMode && name.isEmpty) {
       problem = 'Please tell us your name so your family knows who you are.';
     } else if (email.isEmpty || !email.contains('@')) {
-      problem = 'Enter the email address you use for Memory Circle.';
+      problem = 'Enter the email address you use for Omoide no Wa.';
     } else if (password.isEmpty) {
       problem = 'Enter your password to continue.';
     }
@@ -254,7 +254,7 @@ class _AuthScreenState extends State<AuthScreen> {
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [AppColors.deepGreen, AppColors.forest],
+              colors: [AppColors.orange, AppColors.magenta],
             ),
           ),
           child: const Icon(
@@ -264,11 +264,17 @@ class _AuthScreenState extends State<AuthScreen> {
           ),
         ),
         const SizedBox(height: Insets.md),
-        Text('Memory Circle', style: theme.textTheme.displaySmall),
+        Text('Omoide no Wa', style: theme.textTheme.displaySmall),
         const SizedBox(height: Insets.sm),
         Text(
-          'A quiet home for your family\'s photos and stories.',
+          'Shared memories, beautifully kept.',
           style: theme.textTheme.bodyMedium?.copyWith(color: AppColors.softInk),
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: Insets.xs),
+        Text(
+          'Omoide = memory. Wa = circle and harmony.',
+          style: theme.textTheme.bodySmall?.copyWith(color: AppColors.softInk),
           textAlign: TextAlign.center,
         ),
       ],

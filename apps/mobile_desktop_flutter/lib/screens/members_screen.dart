@@ -116,7 +116,7 @@ class _MembersViewState extends State<MembersView> {
       _refresh();
       messenger.showSnackBar(const SnackBar(
         content: Text('Invitation sent. They can accept it when they open '
-            'Memory Circle.'),
+            'Omoide no Wa.'),
       ));
       await _shareInvite(input.email, input.name);
     } on ApiException catch (error) {
@@ -135,14 +135,14 @@ class _MembersViewState extends State<MembersView> {
       final base = Uri.base;
       final origin = base.scheme.startsWith('http')
           ? '${base.scheme}://${base.authority}${base.path}'
-          : 'https://dennohxy.github.io/MemoryCircle/';
+          : 'https://omoidenowa.com/';
       final url = '$origin?join=$token';
       final inviter = widget.api.currentUser?.displayName ?? 'Your family';
       final message = '$inviter invited you to "${widget.circle.name}" on '
-          'Memory Circle — our private family photo album.\n\n'
+          'Omoide no Wa — our private family photo album.\n\n'
           'Tap to join:\n$url';
       try {
-        await Share.share(message, subject: 'Join our Memory Circle');
+        await Share.share(message, subject: 'Join us on Omoide no Wa');
       } catch (_) {
         await Clipboard.setData(ClipboardData(text: message));
         messenger.showSnackBar(const SnackBar(
@@ -177,11 +177,11 @@ class _MembersViewState extends State<MembersView> {
     final inviter = widget.api.currentUser?.displayName ?? 'Your family';
     final greeting = name.isEmpty ? 'Hello!' : 'Hello $name!';
     return '$greeting\n\n'
-        '$inviter invited you to "${widget.circle.name}" on Memory Circle — '
+        '$inviter invited you to "${widget.circle.name}" on Omoide no Wa — '
         'a private album for our family\'s photos and stories.\n\n'
         '1. Open: $appUrl\n'
         '2. Sign in with: $email\n'
-        '3. New to Memory Circle? Your temporary password is ChangeMe123!\n\n'
+        '3. New to Omoide no Wa? Your temporary password is ChangeMe123!\n\n'
         'See you in the album!';
   }
 
@@ -226,7 +226,7 @@ class _MembersViewState extends State<MembersView> {
             label: const Text('Share…'),
             onPressed: () async {
               try {
-                await Share.share(message, subject: 'Join our Memory Circle');
+                await Share.share(message, subject: 'Join us on Omoide no Wa');
               } catch (_) {
                 await Clipboard.setData(ClipboardData(text: message));
                 messenger.showSnackBar(const SnackBar(
@@ -526,7 +526,7 @@ class _InviteDialogState extends State<_InviteDialog> {
               ],
               const SizedBox(height: Insets.sm),
               Text(
-                'If they are new to Memory Circle, they can sign in with this email and the temporary password ChangeMe123!.',
+                'If they are new to Omoide no Wa, they can sign in with this email and the temporary password ChangeMe123!.',
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: AppColors.softInk),
               ),
@@ -635,7 +635,7 @@ class _FindPeopleDialogState extends State<_FindPeopleDialog> {
               child: _results == null
                   ? Center(
                       child: Text(
-                        'Type at least two letters to find people already on Memory Circle.',
+                        'Type at least two letters to find people already on Omoide no Wa.',
                         style: theme.textTheme.bodySmall
                             ?.copyWith(color: AppColors.softInk),
                         textAlign: TextAlign.center,

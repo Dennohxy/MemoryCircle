@@ -1,4 +1,4 @@
-# Memory Circle app
+# Omoide no Wa app
 
-Flutter client for Memory Circle. See the repository root README and
+Flutter client for Omoide no Wa. See the repository root README and
 docs/DEPLOYMENT.md for how to run and deploy it.

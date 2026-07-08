@@ -1,6 +1,6 @@
-# Memory Circle MVP
+# Omoide no Wa MVP
 
-Memory Circle is a collaborative digital memory album for families and communities. The MVP implements accounts, circles, member roles, upload-driven memory contribution, approval workflows, generated album pages, and a Flutter flip-album client.
+Omoide no Wa is a collaborative digital memory album for families and communities: a private Memory Circle for shared photos, collective approvals, and beautifully kept albums.
 
 ## Structure
 

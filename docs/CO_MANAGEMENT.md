@@ -1,6 +1,6 @@
 # Co-Managed Repository Flow
 
-Memory Circle is co-managed by human maintainers, Codex, and Claude. This
+Omoide no Wa is co-managed by human maintainers, Codex, and Claude. This
 document defines the shared flow so every participant works against one unified
 repository instead of parallel drifting copies.
 

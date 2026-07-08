@@ -28,7 +28,7 @@ class ApiException implements Exception {
 }
 
 const _offlineMessage =
-    'We could not reach Memory Circle right now. Check your connection and try again in a moment.';
+    'We could not reach Omoide no Wa right now. Check your connection and try again in a moment.';
 
 class ApiClient {
   ApiClient({this.baseUrl = apiBase});
