@@ -181,7 +181,7 @@ class _GuestCampaignScreenState extends State<GuestCampaignScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(_campaign?['title'] as String? ?? 'Guest uploads'),
+        title: Text(_campaign?['title'] as String? ?? 'Event campaign'),
       ),
       body: Center(
         child: ConstrainedBox(
@@ -273,7 +273,7 @@ class _GuestCampaignScreenState extends State<GuestCampaignScreen> {
         const SizedBox(height: Insets.sm),
         Text(
           _isYearbook
-              ? 'Add your name and email so your yearbook submissions can be reviewed. No account needed.'
+              ? 'Add your name and email so your event submissions can be reviewed. No account needed.'
               : 'Add your name and email so ${_campaign?['circle_name'] ?? 'the organisers'} '
                   'know who shared each photo. No account needed.',
           style: theme.textTheme.bodyMedium?.copyWith(color: AppColors.softInk),
@@ -417,10 +417,10 @@ class _GuestCampaignScreenState extends State<GuestCampaignScreen> {
     final types = _enabledTypes;
     return ListView(
       children: [
-        Text('Add to the yearbook', style: theme.textTheme.headlineSmall),
+        Text('Add to the event', style: theme.textTheme.headlineSmall),
         const SizedBox(height: Insets.sm),
         Text(
-          'Choose what you want to send. Everything waits for organizer review before it appears.',
+          'Choose what you want to send. Everything waits for organizer review before it appears in the event publication.',
           style: theme.textTheme.bodyMedium?.copyWith(color: AppColors.softInk),
         ),
         const SizedBox(height: Insets.lg),

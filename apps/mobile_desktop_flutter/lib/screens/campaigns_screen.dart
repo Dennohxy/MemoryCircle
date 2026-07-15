@@ -90,7 +90,7 @@ class _CampaignsViewState extends State<CampaignsView> {
       if (!mounted) return;
       _refresh();
       messenger.showSnackBar(const SnackBar(
-        content: Text('Graduation yearbook campaign created. Add a logo, then publish it.'),
+        content: Text('Event campaign created. Add branding, then publish it.'),
       ));
     } on ApiException catch (error) {
       messenger.showSnackBar(SnackBar(content: Text(error.message)));
@@ -277,12 +277,12 @@ class _CampaignsViewState extends State<CampaignsView> {
                       FilledButton.icon(
                         onPressed: _createYearbook,
                         icon: const Icon(Icons.school_outlined),
-                        label: const Text('New graduation yearbook'),
+                        label: const Text('New event campaign'),
                       ),
                       OutlinedButton.icon(
                         onPressed: _create,
                         icon: const Icon(Icons.add_link),
-                        label: const Text('Photo-only guest link'),
+                        label: const Text('Photo collection link'),
                       ),
                     ],
                   ),
@@ -308,7 +308,7 @@ class _CampaignsViewState extends State<CampaignsView> {
                           const SizedBox(height: 2),
                           Text(
                               campaign.isYearbook
-                                  ? 'Graduation yearbook · ${campaign.status}'
+                                  ? 'Event campaign · Graduation yearbook · ${campaign.status}'
                                   : _statusLine(campaign),
                               style: theme.textTheme.bodySmall?.copyWith(
                                 color: campaign.isOpen
@@ -494,7 +494,7 @@ class _CreateYearbookDialogState extends State<_CreateYearbookDialog> {
   Widget build(BuildContext context) {
     final canCreate = _titleController.text.trim().isNotEmpty;
     return AlertDialog(
-      title: const Text('New graduation yearbook'),
+      title: const Text('New event campaign'),
       content: SizedBox(
         width: 460,
         child: SingleChildScrollView(
@@ -504,13 +504,24 @@ class _CreateYearbookDialogState extends State<_CreateYearbookDialog> {
               TextField(
                 controller: _titleController,
                 autofocus: true,
-                decoration: appInput('Yearbook title',
+                decoration: appInput('Event title',
                     hint: 'Engineering Graduation 2026'),
+              ),
+              const SizedBox(height: Insets.sm),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Event type: Graduation yearbook',
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodySmall
+                      ?.copyWith(color: AppColors.softInk),
+                ),
               ),
               const SizedBox(height: Insets.md),
               TextField(
                 controller: _universityController,
-                decoration: appInput('University'),
+                decoration: appInput('Organization or university'),
               ),
               const SizedBox(height: Insets.md),
               TextField(
@@ -560,7 +571,7 @@ class _CreateYearbookDialogState extends State<_CreateYearbookDialog> {
                     verify: _verify,
                   ))
               : null,
-          child: const Text('Create yearbook'),
+          child: const Text('Create event'),
         ),
       ],
     );
@@ -631,7 +642,7 @@ class _ContributionReviewSheetState extends State<_ContributionReviewSheet> {
               Row(
                 children: [
                   Expanded(
-                    child: Text('Yearbook submissions',
+                    child: Text('Event submissions',
                         style: theme.textTheme.titleLarge),
                   ),
                   IconButton(
