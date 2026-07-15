@@ -98,6 +98,12 @@ class ApiClient {
   String _friendlyError(dynamic body, int statusCode) {
     final detail = body is Map<String, dynamic> ? body['detail'] : null;
     if (detail is String && detail.isNotEmpty) return detail;
+    if (detail is Map<String, dynamic>) {
+      final errors = detail['errors'];
+      if (errors is List && errors.isNotEmpty) {
+        return errors.map((error) => _friendlyCode('$error')).join('\n');
+      }
+    }
     switch (statusCode) {
       case 401:
         return 'Your sign-in has expired. Please sign in again.';
@@ -111,6 +117,19 @@ class ApiClient {
         return 'Something went wrong on our side. Please try again.';
     }
   }
+
+  String _friendlyCode(String code) => switch (code) {
+        'theme.logo_required' => 'Add a university logo before publishing.',
+        'rights.unconfirmed' => 'Confirm image rights before publishing.',
+        'consent.required' => 'Add consent text before publishing.',
+        'asset.wrong_circle' => 'That brand image belongs to another circle.',
+        'theme.low_contrast' => 'Choose theme colors with stronger contrast.',
+        String c when c.startsWith('contribution.missing.') =>
+          'Please fill in ${c.split('.').last.replaceAll('_', ' ')}.',
+        String c when c.startsWith('contribution.too_long.') =>
+          '${c.split('.').last.replaceAll('_', ' ')} is too long.',
+        _ => code.replaceAll('.', ' ').replaceAll('_', ' '),
+      };
 
   Future<dynamic> _get(String path) async =>
       _decode(await _run(() => http.get(_uri(path), headers: _authHeaders)));
@@ -490,6 +509,25 @@ class ApiClient {
         'require_email_verify': requireEmailVerify,
       }) as Map<String, dynamic>);
 
+  Future<GuestCampaign> createGraduationCampaign(
+    int circleId, {
+    required String title,
+    String note = '',
+    DateTime? expiresAt,
+    bool requireEmailVerify = true,
+    Map<String, dynamic> details = const {},
+  }) async =>
+      GuestCampaign.fromJson(
+          await _post('/circles/$circleId/campaigns/from-preset', {
+        'preset': 'university_graduation',
+        'title': title,
+        'note': note,
+        'details': details,
+        if (expiresAt != null)
+          'expires_at': expiresAt.toUtc().toIso8601String(),
+        'require_email_verify': requireEmailVerify,
+      }) as Map<String, dynamic>);
+
   Future<List<GuestCampaign>> listCampaigns(int circleId) async => [
         for (final item
             in await _get('/circles/$circleId/campaigns') as List<dynamic>)
@@ -512,6 +550,97 @@ class ApiClient {
   Future<void> revokeCampaign(int circleId, int campaignId) async =>
       _post('/circles/$circleId/campaigns/$campaignId/revoke');
 
+  Future<Map<String, dynamic>> campaignStudio(
+    int circleId,
+    int campaignId,
+  ) async =>
+      await _get('/circles/$circleId/campaigns/$campaignId/studio')
+          as Map<String, dynamic>;
+
+  Future<GuestCampaign> updateCampaignDetails(
+    int circleId,
+    int campaignId, {
+    String? title,
+    String? note,
+    DateTime? expiresAt,
+    Map<String, dynamic>? details,
+    String? consentText,
+  }) async =>
+      GuestCampaign.fromJson(await _patchJson(
+        '/circles/$circleId/campaigns/$campaignId/details',
+        {
+          if (title != null) 'title': title,
+          if (note != null) 'note': note,
+          if (expiresAt != null)
+            'expires_at': expiresAt.toUtc().toIso8601String(),
+          if (details != null) 'details': details,
+          if (consentText != null) 'consent_text': consentText,
+        },
+      ) as Map<String, dynamic>);
+
+  Future<void> publishCampaign(int circleId, int campaignId) async =>
+      _post('/circles/$circleId/campaigns/$campaignId/publish');
+
+  Future<Album> generateYearbook(int circleId, int campaignId) async =>
+      Album.fromJson(await _post(
+        '/circles/$circleId/campaigns/$campaignId/yearbook',
+      ) as Map<String, dynamic>);
+
+  Future<List<CampaignContribution>> listCampaignContributions(
+    int circleId,
+    int campaignId, {
+    String? status,
+  }) async {
+    final query = status == null ? '' : '?status=$status';
+    return [
+      for (final item in await _get(
+        '/circles/$circleId/campaigns/$campaignId/contributions$query',
+      ) as List<dynamic>)
+        CampaignContribution.fromJson(item as Map<String, dynamic>),
+    ];
+  }
+
+  Future<void> moderateCampaignContribution(
+    int circleId,
+    int campaignId,
+    int contributionId,
+    String action,
+  ) async =>
+      _post(
+        '/circles/$circleId/campaigns/$campaignId/contributions/'
+        '$contributionId/$action',
+      );
+
+  Future<void> uploadBrandAsset(
+    int circleId,
+    int presetId, {
+    required String kind,
+    required PlatformFile file,
+    bool rightsConfirmed = true,
+  }) async {
+    final request = http.MultipartRequest(
+      'POST',
+      _uri('/circles/$circleId/theme-presets/$presetId/assets'),
+    );
+    request.headers.addAll(_authHeaders);
+    request.fields['kind'] = kind;
+    request.fields['rights_confirmed'] = '$rightsConfirmed';
+    final mediaType = _imageMediaType(file.name);
+    if (file.bytes != null) {
+      request.files.add(http.MultipartFile.fromBytes('file', file.bytes!,
+          filename: file.name, contentType: mediaType));
+    } else if (file.path != null) {
+      request.files.add(await http.MultipartFile.fromPath('file', file.path!,
+          filename: file.name, contentType: mediaType));
+    } else {
+      throw ApiException(
+          'We could not read that image. Please choose it again.');
+    }
+    final response =
+        await _run(() async => http.Response.fromStream(await request.send()));
+    _decode(response);
+  }
+
   // ---- Guest-upload campaigns (guest side, no login) ----
 
   Future<Map<String, dynamic>> getCampaign(String token) async =>
@@ -526,6 +655,28 @@ class ApiClient {
   }) async =>
       await _post('/campaigns/$token/guest', {'name': name, 'email': email})
           as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> registerContributor(
+    String token, {
+    required String name,
+    required String email,
+    required bool acceptConsent,
+  }) async =>
+      await _post('/campaigns/$token/contributors', {
+        'name': name,
+        'email': email,
+        'accept_consent': acceptConsent,
+      }) as Map<String, dynamic>;
+
+  Future<String> verifyContributor(
+    String token, {
+    required String email,
+    required String code,
+  }) async {
+    final data = await _post('/campaigns/$token/contributors/verify',
+        {'email': email, 'code': code}) as Map<String, dynamic>;
+    return data['contributor_token'] as String;
+  }
 
   Future<String> verifyGuest(
     String token, {
@@ -563,6 +714,57 @@ class ApiClient {
         await _run(() async => http.Response.fromStream(await request.send()));
     _decode(response);
   }
+
+  Future<int> uploadContributionAsset(
+    String token, {
+    required String contributorToken,
+    required PlatformFile file,
+  }) async {
+    final request =
+        http.MultipartRequest('POST', _uri('/campaigns/$token/contribution-assets'));
+    request.fields['contributor_token'] = contributorToken;
+    final mediaType = _imageMediaType(file.name);
+    if (file.bytes != null) {
+      request.files.add(http.MultipartFile.fromBytes('file', file.bytes!,
+          filename: file.name, contentType: mediaType));
+    } else if (file.path != null) {
+      request.files.add(await http.MultipartFile.fromPath('file', file.path!,
+          filename: file.name, contentType: mediaType));
+    } else {
+      throw ApiException(
+          'We could not read that photo. Please choose it again.');
+    }
+    final response =
+        await _run(() async => http.Response.fromStream(await request.send()));
+    final data = _decode(response) as Map<String, dynamic>;
+    return data['asset_id'] as int;
+  }
+
+  Future<CampaignContribution> createContribution(
+    String token, {
+    required String contributorToken,
+    required String type,
+    required Map<String, dynamic> payload,
+    int? assetId,
+  }) async =>
+      CampaignContribution.fromJson(await _post('/campaigns/$token/contributions', {
+        'contributor_token': contributorToken,
+        'contribution_type': type,
+        'payload': payload,
+        if (assetId != null) 'asset_id': assetId,
+      }) as Map<String, dynamic>);
+
+  Future<List<CampaignContribution>> myContributions(
+    String token, {
+    required String contributorToken,
+  }) async =>
+      [
+        for (final item in await _get(
+          '/campaigns/$token/contributions?contributor_token='
+          '${Uri.encodeQueryComponent(contributorToken)}',
+        ) as List<dynamic>)
+          CampaignContribution.fromJson(item as Map<String, dynamic>),
+      ];
 
   /// Fetches an image with the Authorization header so protected thumbnails
   /// and display images can be shown via `Image.memory`. Bytes are cached in

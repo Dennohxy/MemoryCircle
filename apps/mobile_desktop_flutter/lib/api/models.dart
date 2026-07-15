@@ -188,6 +188,10 @@ class GuestCampaign {
     required this.revoked,
     this.note = '',
     this.circleName = '',
+    this.campaignType = 'photo_collection',
+    this.status = 'published',
+    this.details = const {},
+    this.linkedAlbumId,
     this.expiresAt,
   });
 
@@ -200,6 +204,15 @@ class GuestCampaign {
         revoked: json['revoked'] == true,
         note: _asText(json['note']),
         circleName: _asText(json['circle_name']),
+        campaignType: _asText(json['campaign_type']).isEmpty
+            ? 'photo_collection'
+            : _asText(json['campaign_type']),
+        status:
+            _asText(json['status']).isEmpty ? 'published' : _asText(json['status']),
+        details: (json['details'] as Map<String, dynamic>?) ?? const {},
+        linkedAlbumId: json['linked_album_id'] == null
+            ? null
+            : _asInt(json['linked_album_id']),
         expiresAt: _asDate(json['expires_at']),
       );
 
@@ -211,7 +224,57 @@ class GuestCampaign {
   final bool revoked;
   final String note;
   final String circleName;
+  final String campaignType;
+  final String status;
+  final Map<String, dynamic> details;
+  final int? linkedAlbumId;
   final DateTime? expiresAt;
+
+  bool get isYearbook => campaignType != 'photo_collection';
+  bool get isDraft => status == 'draft';
+}
+
+class CampaignContribution {
+  const CampaignContribution({
+    required this.id,
+    required this.type,
+    required this.status,
+    required this.payload,
+    this.displayName = '',
+    this.thumbnailUrl = '',
+  });
+
+  factory CampaignContribution.fromJson(Map<String, dynamic> json) =>
+      CampaignContribution(
+        id: _asInt(json['id']),
+        type: _asText(json['contribution_type']),
+        status: _asText(json['moderation_status']),
+        payload: (json['payload'] as Map<String, dynamic>?) ?? const {},
+        displayName: _asText(json['display_name']),
+        thumbnailUrl: _asText(json['thumbnail_url']),
+      );
+
+  final int id;
+  final String type;
+  final String status;
+  final Map<String, dynamic> payload;
+  final String displayName;
+  final String thumbnailUrl;
+
+  String get title {
+    final fields = [
+      payload['full_name'],
+      payload['title'],
+      payload['message'],
+      payload['caption'],
+      payload['text'],
+    ];
+    for (final value in fields) {
+      final text = _asText(value);
+      if (text.isNotEmpty) return text;
+    }
+    return displayName.isEmpty ? type : displayName;
+  }
 }
 
 /// A registered person found via member search, with whether they are
