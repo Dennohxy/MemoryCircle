@@ -5,6 +5,7 @@ import json
 import os
 import secrets
 import shutil
+import warnings
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -13,9 +14,10 @@ from typing import Optional
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse
 from PIL import Image
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import and_, delete, func, inspect as sa_inspect, or_, select, text
 from sqlalchemy.orm import Session
 
@@ -66,6 +68,11 @@ STORAGE_ROOT = Path(os.getenv("STORAGE_ROOT", "storage")).resolve()
 # free-tier hosts whose local disks are ephemeral.
 ASSET_STORAGE = os.getenv("ASSET_STORAGE", "disk").lower()
 ALLOWED_IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+MAX_IMAGE_PIXELS = int(os.getenv("MAX_IMAGE_PIXELS", "40000000"))
+MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", str(MAX_UPLOAD_BYTES + 1024 * 1024)))
+VERIFY_RESEND_SECONDS = 60
+VERIFY_MAX_ATTEMPTS = 5
 ROLE_ORDER = {"viewer": 0, "contributor": 1, "approver": 2, "editor": 3, "owner": 4}
 WRITE_ROLES = {"owner", "editor", "approver", "contributor"}
 EDIT_ROLES = {"owner", "editor"}
@@ -79,16 +86,53 @@ DEMOTION_STEP = {"editor": "approver", "approver": "contributor", "contributor":
 
 app = FastAPI(title="Omoide no Wa API", version="0.1.0")
 
+trusted_hosts = [
+    host.strip()
+    for host in os.getenv(
+        "TRUSTED_HOSTS",
+        "omoidenowa.com,*.omoidenowa.com,*.onrender.com,localhost,127.0.0.1,testserver",
+    ).split(",")
+    if host.strip()
+]
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=trusted_hosts)
+
 # The Flutter web client is served from a different local port, so browsers
 # send CORS preflight requests that must be answered here.
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        f"{APP_BASE_URL},http://localhost:3000,http://localhost:5000,http://localhost:8080",
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=cors_origins,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 # Compress JSON responses so lists of memories/albums travel smaller.
 app.add_middleware(GZipMiddleware, minimum_size=600)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_REQUEST_BYTES:
+                return Response(status_code=413, content="Request body too large")
+        except ValueError:
+            return Response(status_code=400, content="Invalid Content-Length header")
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 
 def ensure_asset_blob_columns():
@@ -165,6 +209,18 @@ def ensure_account_and_campaign_support():
     Base.metadata.tables["guest_campaigns"].create(bind=engine, checkfirst=True)
     Base.metadata.tables["guest_upload_sessions"].create(bind=engine, checkfirst=True)
     inspector = sa_inspect(engine)
+    verification_additions = {
+        "verify_sent_at": "TIMESTAMP",
+        "verify_attempts": "INTEGER DEFAULT 0",
+    }
+    with engine.begin() as connection:
+        for table_name in ("guest_upload_sessions", "campaign_contributors"):
+            if table_name not in inspector.get_table_names():
+                continue
+            existing = {column["name"] for column in inspector.get_columns(table_name)}
+            for column_name, definition in verification_additions.items():
+                if column_name not in existing:
+                    connection.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"))
     if "memory_items" in inspector.get_table_names():
         existing = {column["name"] for column in inspector.get_columns("memory_items")}
         additions = {
@@ -240,19 +296,19 @@ def startup():
 
 
 class UserIn(BaseModel):
-    display_name: str
+    display_name: str = Field(min_length=1, max_length=160)
     email: EmailStr
-    password: str
+    password: str = Field(min_length=8, max_length=128)
 
 
 class LoginIn(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1, max_length=128)
 
 
 class ChangePasswordIn(BaseModel):
-    current_password: str
-    new_password: str
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class ForgotPasswordIn(BaseModel):
@@ -261,7 +317,7 @@ class ForgotPasswordIn(BaseModel):
 
 class ResetPasswordIn(BaseModel):
     token: str
-    new_password: str
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class CampaignIn(BaseModel):
@@ -1624,6 +1680,7 @@ def store_asset_bytes(
     filename: Optional[str],
     created_by: int,
     source_type: str = "local_upload",
+    source_reference: Optional[str] = None,
     capture_date_override: Optional[datetime] = None,
 ) -> PhotoAsset:
     """Processes and stores an uploaded image (dedupe, display + thumbnail
@@ -1631,30 +1688,41 @@ def store_asset_bytes(
     logged-in upload endpoint and guest campaign uploads."""
     if content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail="Only JPEG, PNG, and WebP images are supported")
+    if not raw:
+        raise HTTPException(status_code=400, detail="Choose an image to upload")
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"That image is too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)")
     content_hash = hashlib.sha256(raw).hexdigest()
-    existing = db.scalar(
-        select(PhotoAsset).where(
-            PhotoAsset.circle_id == circle_id,
-            PhotoAsset.content_hash == content_hash,
-        )
+    dedupe_query = select(PhotoAsset).where(
+        PhotoAsset.circle_id == circle_id,
+        PhotoAsset.content_hash == content_hash,
     )
+    if source_reference is not None:
+        # Guest assets are isolated per contributor. A matching private circle
+        # asset must never be returned as proof that the guest owns it.
+        dedupe_query = dedupe_query.where(PhotoAsset.source_reference == source_reference)
+    existing = db.scalar(dedupe_query)
     if existing:
         return existing
     source = PhotoSource(user_id=created_by, source_type=source_type, source_name=filename or "Local upload")
     db.add(source)
     db.flush()
     try:
-        with Image.open(BytesIO(raw)) as image:
-            width, height = image.size
-            detected_capture_date = image_capture_date(image)
-            image.thumbnail((1600, 1600))
-            display_io = BytesIO()
-            image.convert("RGB").save(display_io, format="JPEG", quality=86)
-        with Image.open(BytesIO(raw)) as image:
-            image.thumbnail((360, 360))
-            thumbnail_io = BytesIO()
-            image.convert("RGB").save(thumbnail_io, format="JPEG", quality=82)
-    except Exception:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(BytesIO(raw)) as image:
+                width, height = image.size
+                if width * height > MAX_IMAGE_PIXELS:
+                    raise ValueError("image dimensions exceed the configured limit")
+                detected_capture_date = image_capture_date(image)
+                image.thumbnail((1600, 1600))
+                display_io = BytesIO()
+                image.convert("RGB").save(display_io, format="JPEG", quality=86)
+            with Image.open(BytesIO(raw)) as image:
+                image.thumbnail((360, 360))
+                thumbnail_io = BytesIO()
+                image.convert("RGB").save(thumbnail_io, format="JPEG", quality=82)
+    except (Exception, Image.DecompressionBombWarning):
         raise HTTPException(status_code=400, detail="Uploaded file is not a readable image")
     display_bytes = display_io.getvalue()
     thumbnail_bytes = thumbnail_io.getvalue()
@@ -1683,7 +1751,7 @@ def store_asset_bytes(
         circle_id=circle_id,
         source_id=source.id,
         source_type=source_type,
-        source_reference=f"upload:{content_hash}",
+        source_reference=source_reference or f"upload:{content_hash}",
         content_hash=content_hash,
         original_filename=filename or "upload",
         mime_type=content_type or "application/octet-stream",
@@ -1716,7 +1784,7 @@ def upload_asset(
     asset = store_asset_bytes(
         db,
         circle_id,
-        file.file.read(),
+        file.file.read(MAX_UPLOAD_BYTES + 1),
         file.content_type,
         file.filename,
         user.id,
@@ -2424,26 +2492,45 @@ def register_guest(token: str, payload: GuestRegisterIn, db: Session = Depends(g
         # Old clients hitting a structured campaign get an explicit signal
         # instead of a photo-only flow (design doc section 14).
         raise HTTPException(status_code=409, detail="Update required for this campaign")
+    if campaign.require_email_verify and not email_enabled():
+        raise HTTPException(status_code=503, detail="Email verification is temporarily unavailable")
+    email = payload.email.lower()
+    latest = db.scalar(
+        select(GuestUploadSession)
+        .where(
+            GuestUploadSession.campaign_id == campaign.id,
+            GuestUploadSession.guest_email == email,
+        )
+        .order_by(GuestUploadSession.created_at.desc())
+    )
+    if (
+        campaign.require_email_verify
+        and latest
+        and latest.verify_sent_at
+        and latest.verify_sent_at + timedelta(seconds=VERIFY_RESEND_SECONDS) > datetime.utcnow()
+    ):
+        raise HTTPException(status_code=429, detail="Wait a minute before requesting another code")
     session = GuestUploadSession(
         campaign_id=campaign.id,
         guest_name=payload.name.strip() or "Guest",
-        guest_email=payload.email.lower(),
+        guest_email=email,
         token=secrets.token_urlsafe(24),
         verified=not campaign.require_email_verify,
     )
     if campaign.require_email_verify:
         session.verify_code = f"{secrets.randbelow(1000000):06d}"
         session.verify_expires_at = datetime.utcnow() + timedelta(minutes=15)
+        session.verify_sent_at = datetime.utcnow()
+        session.verify_attempts = 0
     db.add(session)
     db.commit()
     db.refresh(session)
     if campaign.require_email_verify:
         sent = send_guest_verify_code(session.guest_email, campaign.title, session.verify_code)
-        # If email isn't configured, don't strand the guest — let them in.
-        if not sent and not email_enabled():
-            session.verified = True
+        if not sent:
+            session.verify_sent_at = None
             db.commit()
-            return {"guest_token": session.token, "needs_verification": False}
+            raise HTTPException(status_code=503, detail="We could not send the verification code. Try again shortly.")
         return {"needs_verification": True}
     return {"guest_token": session.token, "needs_verification": False}
 
@@ -2459,11 +2546,21 @@ def verify_guest(token: str, payload: GuestVerifyIn, db: Session = Depends(get_d
         )
         .order_by(GuestUploadSession.created_at.desc())
     )
-    if not session or session.verify_code != payload.code.strip():
+    if (
+        not session
+        or session.verify_attempts >= VERIFY_MAX_ATTEMPTS
+        or not secrets.compare_digest(session.verify_code, payload.code.strip())
+    ):
+        if session and session.verify_attempts < VERIFY_MAX_ATTEMPTS:
+            session.verify_attempts += 1
+            if session.verify_attempts >= VERIFY_MAX_ATTEMPTS:
+                session.verify_code = ""
+            db.commit()
         raise HTTPException(status_code=400, detail="That code is not correct")
     if session.verify_expires_at and session.verify_expires_at < datetime.utcnow():
         raise HTTPException(status_code=400, detail="That code has expired")
     session.verified = True
+    session.verify_code = ""
     db.commit()
     return {"guest_token": session.token, "needs_verification": False}
 
@@ -2488,11 +2585,12 @@ def guest_upload(
     asset = store_asset_bytes(
         db,
         campaign.circle_id,
-        file.file.read(),
+        file.file.read(MAX_UPLOAD_BYTES + 1),
         file.content_type,
         file.filename,
         campaign.created_by,
         source_type="guest_upload",
+        source_reference=f"campaign:{campaign.id}:guest-session:{session.id}",
     )
     memory = MemoryItem(
         circle_id=campaign.circle_id,
@@ -2785,8 +2883,8 @@ def upload_brand_asset(
         raise HTTPException(status_code=400, detail="Unknown brand asset kind")
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail="Only JPEG, PNG, and WebP images are supported")
-    raw = file.file.read()
     max_bytes, min_edge, max_edge = BRAND_ASSET_RULES[kind]
+    raw = file.file.read(max_bytes + 1)
     if len(raw) > max_bytes:
         raise HTTPException(status_code=400, detail=f"That image is too large (max {max_bytes // (1024 * 1024)} MB)")
     try:
@@ -3232,6 +3330,8 @@ def register_contributor(token: str, payload: ContributorRegisterIn, db: Session
     if (getattr(campaign, "consent_text", "") or "").strip() and not payload.accept_consent:
         raise HTTPException(status_code=400, detail="Please accept the consent statement to continue")
     email = payload.email.lower()
+    if campaign.require_email_verify and not email_enabled():
+        raise HTTPException(status_code=503, detail="Email verification is temporarily unavailable")
     contributor = db.scalar(
         select(CampaignContributor).where(
             CampaignContributor.campaign_id == campaign.id,
@@ -3258,16 +3358,22 @@ def register_contributor(token: str, payload: ContributorRegisterIn, db: Session
         contributor.withdrawn_at = None
     needs_verification = campaign.require_email_verify and contributor.verification_status != "verified"
     if needs_verification:
+        if (
+            contributor.verify_sent_at
+            and contributor.verify_sent_at + timedelta(seconds=VERIFY_RESEND_SECONDS) > datetime.utcnow()
+        ):
+            raise HTTPException(status_code=429, detail="Wait a minute before requesting another code")
         contributor.verify_code = f"{secrets.randbelow(1000000):06d}"
         contributor.verify_expires_at = datetime.utcnow() + timedelta(minutes=15)
+        contributor.verify_sent_at = datetime.utcnow()
+        contributor.verify_attempts = 0
         db.commit()
         db.refresh(contributor)
         sent = send_guest_verify_code(contributor.guest_email, campaign.title, contributor.verify_code)
-        if not sent and not email_enabled():
-            contributor.verification_status = "verified"
-            contributor.verified_at = datetime.utcnow()
+        if not sent:
+            contributor.verify_sent_at = None
             db.commit()
-            return {"contributor_token": contributor.token, "needs_verification": False}
+            raise HTTPException(status_code=503, detail="We could not send the verification code. Try again shortly.")
         return {"needs_verification": True}
     contributor.verification_status = "verified"
     if contributor.verified_at is None:
@@ -3286,12 +3392,22 @@ def verify_contributor(token: str, payload: GuestVerifyIn, db: Session = Depends
             CampaignContributor.guest_email == payload.email.lower(),
         )
     )
-    if not contributor or contributor.verify_code != payload.code.strip():
+    if (
+        not contributor
+        or contributor.verify_attempts >= VERIFY_MAX_ATTEMPTS
+        or not secrets.compare_digest(contributor.verify_code, payload.code.strip())
+    ):
+        if contributor and contributor.verify_attempts < VERIFY_MAX_ATTEMPTS:
+            contributor.verify_attempts += 1
+            if contributor.verify_attempts >= VERIFY_MAX_ATTEMPTS:
+                contributor.verify_code = ""
+            db.commit()
         raise HTTPException(status_code=400, detail="That code is not correct")
     if contributor.verify_expires_at and contributor.verify_expires_at < datetime.utcnow():
         raise HTTPException(status_code=400, detail="That code has expired")
     contributor.verification_status = "verified"
     contributor.verified_at = datetime.utcnow()
+    contributor.verify_code = ""
     db.commit()
     return {"contributor_token": contributor.token, "needs_verification": False}
 
@@ -3304,15 +3420,16 @@ def upload_contribution_asset(
     db: Session = Depends(get_db),
 ):
     campaign = require_open_campaign(db, token)
-    require_contributor(db, campaign, contributor_token)
+    contributor = require_contributor(db, campaign, contributor_token)
     asset = store_asset_bytes(
         db,
         campaign.circle_id,
-        file.file.read(),
+        file.file.read(MAX_UPLOAD_BYTES + 1),
         file.content_type,
         file.filename,
         campaign.created_by,
         source_type="guest_upload",
+        source_reference=f"campaign:{campaign.id}:contributor:{contributor.id}",
     )
     db.commit()
     db.refresh(asset)
@@ -3333,8 +3450,13 @@ def create_contribution(token: str, payload: ContributionIn, db: Session = Depen
         raise HTTPException(status_code=400, detail={"errors": errors})
     if payload.asset_id:
         asset = db.get(PhotoAsset, payload.asset_id)
-        if not asset or asset.circle_id != campaign.circle_id:
-            raise HTTPException(status_code=400, detail={"errors": ["asset.wrong_circle"]})
+        expected_reference = f"campaign:{campaign.id}:contributor:{contributor.id}"
+        if (
+            not asset
+            or asset.circle_id != campaign.circle_id
+            or asset.source_reference != expected_reference
+        ):
+            raise HTTPException(status_code=400, detail={"errors": ["asset.not_uploaded_by_contributor"]})
     quota = campaign_quota_usage(db, campaign)
     if (
         payload.contribution_type != "photo_memory"
@@ -3409,8 +3531,13 @@ def patch_contribution(token: str, contribution_id: int, payload: ContributionPa
         contribution.payload_json = json.dumps(clean)
     if payload.asset_id is not None:
         asset = db.get(PhotoAsset, payload.asset_id)
-        if not asset or asset.circle_id != campaign.circle_id:
-            raise HTTPException(status_code=400, detail={"errors": ["asset.wrong_circle"]})
+        expected_reference = f"campaign:{campaign.id}:contributor:{contributor.id}"
+        if (
+            not asset
+            or asset.circle_id != campaign.circle_id
+            or asset.source_reference != expected_reference
+        ):
+            raise HTTPException(status_code=400, detail={"errors": ["asset.not_uploaded_by_contributor"]})
         contribution.asset_id = payload.asset_id
     contribution.moderation_status = "pending"
     contribution.votes_json = "[]"

@@ -16,6 +16,8 @@ services:
       # (free instances have ephemeral disks).
       - key: ASSET_STORAGE
         value: db
+      - key: APP_ENV
+        value: production
       - key: SECRET_KEY
         generateValue: true
       # Paste your Neon (or any) Postgres connection string in the dashboard.

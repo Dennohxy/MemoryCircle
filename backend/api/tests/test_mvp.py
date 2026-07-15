@@ -2,6 +2,11 @@ from datetime import datetime, timedelta
 from io import BytesIO
 
 from PIL import Image
+from sqlalchemy import select
+
+from app import main as main_module
+from app.database import SessionLocal
+from app.models import GuestUploadSession
 
 
 def register(client, email, role_name="User"):
@@ -28,6 +33,23 @@ def image_file(color=(210, 140, 96), capture_date=None, size=(900, 700)):
         image.save(stream, format="JPEG")
     stream.seek(0)
     return stream
+
+
+def test_http_security_boundaries(client):
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.headers["x-content-type-options"] == "nosniff"
+    assert health.headers["x-frame-options"] == "DENY"
+
+    poisoned_host = client.get("/health", headers={"Host": "example.com/forged"})
+    assert poisoned_host.status_code == 400
+
+    oversized = client.post(
+        "/auth/login",
+        content=b"{}",
+        headers={"Content-Type": "application/json", "Content-Length": str(main_module.MAX_REQUEST_BYTES + 1)},
+    )
+    assert oversized.status_code == 413
 
 
 def setup_circle(client):
@@ -970,16 +992,58 @@ def test_guest_campaign_upload_flow(client):
                        files={"file": ("p2.jpg", image_file(color=(1, 2, 3)), "image/jpeg")}).status_code == 410
 
 
-def test_guest_campaign_email_verification(client):
+def test_guest_campaign_email_verification_fails_closed_without_email(client):
     circle_id, owner, _approver, _contributor, _viewer = setup_circle(client)
     campaign = client.post(f"/circles/{circle_id}/campaigns",
                            json={"title": "Gala", "require_email_verify": True},
                            headers=auth(owner)).json()
     token = campaign["token"]
     reg = client.post(f"/campaigns/{token}/guest", json={"name": "Guest", "email": "g@guest.com"})
-    # With no email configured in tests, the guest is let in directly.
-    assert reg.status_code == 200, reg.text
-    assert "guest_token" in reg.json()
+    assert reg.status_code == 503, reg.text
+    assert "guest_token" not in reg.json()
+
+
+def test_guest_verification_locks_after_repeated_wrong_codes(client, monkeypatch):
+    circle_id, owner, _approver, _contributor, _viewer = setup_circle(client)
+    campaign = client.post(
+        f"/circles/{circle_id}/campaigns",
+        json={"title": "Verified event", "require_email_verify": True},
+        headers=auth(owner),
+    ).json()
+    monkeypatch.setattr(main_module, "email_enabled", lambda: True)
+    monkeypatch.setattr(main_module, "send_guest_verify_code", lambda *_args: True)
+    registered = client.post(
+        f"/campaigns/{campaign['token']}/guest",
+        json={"name": "Guest", "email": "locked@guest.com"},
+    )
+    assert registered.status_code == 200, registered.text
+    with SessionLocal() as db:
+        session = db.scalar(
+            select(GuestUploadSession).where(GuestUploadSession.guest_email == "locked@guest.com")
+        )
+        correct_code = session.verify_code
+    for _ in range(main_module.VERIFY_MAX_ATTEMPTS):
+        response = client.post(
+            f"/campaigns/{campaign['token']}/guest/verify",
+            json={"email": "locked@guest.com", "code": "wrong"},
+        )
+        assert response.status_code == 400
+    locked = client.post(
+        f"/campaigns/{campaign['token']}/guest/verify",
+        json={"email": "locked@guest.com", "code": correct_code},
+    )
+    assert locked.status_code == 400
+
+
+def test_upload_rejects_oversized_body_before_image_processing(client, monkeypatch):
+    circle_id, owner, _approver, _contributor, _viewer = setup_circle(client)
+    monkeypatch.setattr(main_module, "MAX_UPLOAD_BYTES", 8)
+    response = client.post(
+        f"/circles/{circle_id}/assets/upload",
+        files={"file": ("large.jpg", BytesIO(b"123456789"), "image/jpeg")},
+        headers=auth(owner),
+    )
+    assert response.status_code == 413
 
 
 def test_reviewer_does_not_manage_campaigns(client):
@@ -1129,6 +1193,23 @@ def test_graduation_yearbook_pilot_end_to_end(client):
     asset = client.post(f"/campaigns/{token}/contribution-assets",
                         data={"contributor_token": contributor_token},
                         files={"file": ("grad.jpg", image_file(color=(9, 9, 99)), "image/jpeg")}).json()
+
+    # A different contributor cannot claim a guessed asset id from this circle.
+    other = client.post(
+        f"/campaigns/{token}/contributors",
+        json={"name": "Other Graduate", "email": "other@grad.com", "accept_consent": True},
+    ).json()["contributor_token"]
+    stolen = client.post(
+        f"/campaigns/{token}/contributions",
+        json={
+            "contributor_token": other,
+            "contribution_type": "photo_memory",
+            "payload": {"caption": "Not mine"},
+            "asset_id": asset["asset_id"],
+        },
+    )
+    assert stolen.status_code == 400
+    assert "asset.not_uploaded_by_contributor" in stolen.text
 
     submissions = [
         {"contribution_type": "graduate_profile",
