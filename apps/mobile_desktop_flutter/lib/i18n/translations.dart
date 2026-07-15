@@ -205,7 +205,7 @@ const translations = <AppLanguage, TranslationMap>{
     'settings': {
       'saved': 'Your changes were saved.',
       'about': 'About this circle',
-      'ownerOnly': 'Only the circle owner can change these details.',
+      'ownerOnly': 'Only circle owners and editors can change these details.',
       'moreToCome': 'More to come',
       'moreText':
           'Options for invitations, archiving, and privacy will live here as Omoide no Wa grows.',
@@ -216,10 +216,12 @@ const translations = <AppLanguage, TranslationMap>{
     },
     'roles': {
       'owner': 'Owner',
+      'editor': 'Editor',
       'approver': 'Reviewer',
       'contributor': 'Contributor',
       'viewer': 'Viewer',
       'ownerDescription': 'Manages the circle',
+      'editorDescription': 'Edits circles, campaigns, and albums',
       'approverDescription': 'Can add memories to the album',
       'contributorDescription': 'Can send memories',
       'viewerDescription': 'Can view the album',
@@ -410,7 +412,7 @@ const translations = <AppLanguage, TranslationMap>{
     'settings': {
       'saved': '変更を保存しました。',
       'about': 'このサークルについて',
-      'ownerOnly': 'この詳細を変更できるのはサークルのオーナーだけです。',
+      'ownerOnly': 'この詳細を変更できるのはサークルのオーナーとエディターだけです。',
       'moreToCome': '今後の機能',
       'moreText': '招待、アーカイブ、プライバシーの設定は、Omoide no Waの成長に合わせてここに追加されます。',
       'saveChanges': '変更を保存',
@@ -420,10 +422,12 @@ const translations = <AppLanguage, TranslationMap>{
     },
     'roles': {
       'owner': 'オーナー',
+      'editor': 'エディター',
       'approver': 'レビュアー',
       'contributor': '投稿者',
       'viewer': '閲覧者',
       'ownerDescription': 'サークルを管理できます',
+      'editorDescription': 'サークル、キャンペーン、アルバムを編集できます',
       'approverDescription': '思い出をアルバムに追加できます',
       'contributorDescription': '思い出を送信できます',
       'viewerDescription': 'アルバムを閲覧できます',

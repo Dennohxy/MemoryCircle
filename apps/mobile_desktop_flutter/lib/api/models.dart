@@ -61,6 +61,7 @@ class UserProfile {
 /// app shows instead.
 enum CircleRole {
   owner('owner', 'Owner', 'Manages the circle'),
+  editor('editor', 'Editor', 'Edits circles, campaigns, and albums'),
   approver('approver', 'Reviewer', 'Can add memories to the album'),
   contributor('contributor', 'Contributor', 'Can send memories'),
   viewer('viewer', 'Viewer', 'Can view the album');
@@ -77,7 +78,11 @@ enum CircleRole {
       );
 
   bool get canContribute => this != CircleRole.viewer;
-  bool get canReview => this == CircleRole.owner || this == CircleRole.approver;
+  bool get canEdit => this == CircleRole.owner || this == CircleRole.editor;
+  bool get canReview =>
+      this == CircleRole.owner ||
+      this == CircleRole.editor ||
+      this == CircleRole.approver;
   bool get isOwner => this == CircleRole.owner;
 }
 

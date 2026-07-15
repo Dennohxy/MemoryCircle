@@ -6,7 +6,7 @@ import '../app/theme.dart';
 import '../i18n/index.dart';
 import '../widgets/paper_card.dart';
 
-/// Circle settings: owners can rename the circle and update its
+/// Circle settings: owners and editors can rename the circle and update its
 /// description; everyone else sees a modest read-only view.
 class SettingsView extends StatefulWidget {
   const SettingsView({
@@ -78,7 +78,7 @@ class _SettingsViewState extends State<SettingsView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (widget.role.isOwner)
+                if (widget.role.canEdit)
                   PaperCard(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,

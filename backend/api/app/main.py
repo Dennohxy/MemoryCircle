@@ -66,15 +66,16 @@ STORAGE_ROOT = Path(os.getenv("STORAGE_ROOT", "storage")).resolve()
 # free-tier hosts whose local disks are ephemeral.
 ASSET_STORAGE = os.getenv("ASSET_STORAGE", "disk").lower()
 ALLOWED_IMAGE_TYPES = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
-ROLE_ORDER = {"viewer": 0, "contributor": 1, "approver": 2, "owner": 3}
-WRITE_ROLES = {"owner", "approver", "contributor"}
-APPROVE_ROLES = {"owner", "approver"}
+ROLE_ORDER = {"viewer": 0, "contributor": 1, "approver": 2, "editor": 3, "owner": 4}
+WRITE_ROLES = {"owner", "editor", "approver", "contributor"}
+EDIT_ROLES = {"owner", "editor"}
+APPROVE_ROLES = {"owner", "editor", "approver"}
 FIRST_VIEW_ASSET_GRACE = timedelta(minutes=30)
 # Member inactivity lifecycle: after 30 idle days a member is demoted one
 # role step; after 90 idle days they are flagged to the owner for removal.
 INACTIVITY_DEMOTE_DAYS = 30
 INACTIVITY_FLAG_DAYS = 90
-DEMOTION_STEP = {"approver": "contributor", "contributor": "viewer"}
+DEMOTION_STEP = {"editor": "approver", "approver": "contributor", "contributor": "viewer"}
 
 app = FastAPI(title="Omoide no Wa API", version="0.1.0")
 
@@ -1368,7 +1369,7 @@ def get_circle(circle_id: int, db: Session = Depends(get_db), user: User = Depen
 
 @app.patch("/circles/{circle_id}")
 def patch_circle(circle_id: int, payload: CirclePatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    require_member(db, circle_id, user, {"owner"})
+    require_member(db, circle_id, user, EDIT_ROLES)
     circle = db.get(MemoryCircle, circle_id)
     if not circle:
         raise HTTPException(status_code=404, detail="Circle not found")
@@ -2117,7 +2118,7 @@ def create_share_package(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    require_member(db, circle_id, user, {"owner"})
+    require_member(db, circle_id, user, EDIT_ROLES)
     album = db.get(Album, album_id)
     if not album or album.circle_id != circle_id:
         raise HTTPException(status_code=404, detail="Album not found")
@@ -2159,7 +2160,7 @@ def list_share_packages(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    require_member(db, circle_id, user, {"owner"})
+    require_member(db, circle_id, user, EDIT_ROLES)
     album = db.get(Album, album_id)
     if not album or album.circle_id != circle_id:
         raise HTTPException(status_code=404, detail="Album not found")
@@ -2180,7 +2181,7 @@ def revoke_share_package(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    require_member(db, circle_id, user, {"owner"})
+    require_member(db, circle_id, user, EDIT_ROLES)
     package = db.get(SharePackage, package_id)
     if not package or package.circle_id != circle_id or package.album_id != album_id:
         raise HTTPException(status_code=404, detail="Share package not found")
@@ -2237,7 +2238,7 @@ def get_public_share_asset(token: str, asset_id: int, variant: str, db: Session 
 
 # ---- Guest-upload campaigns (time-limited, no-login) ----
 
-GUEST_UPLOAD_LIMIT = 100  # photos per guest email per campaign
+GUEST_UPLOAD_LIMIT = None  # Campaign photo uploads are intentionally unlimited.
 
 
 def campaign_is_open(campaign: GuestCampaign) -> bool:
@@ -2273,7 +2274,7 @@ def campaign_quota_usage(db: Session, campaign: GuestCampaign) -> dict:
         "participants_limit": getattr(campaign, "participant_quota", None) or 250,
         "contributions_used": contributions,
         "contributions_limit": getattr(campaign, "total_contribution_quota", None) or 1500,
-        "per_guest_photo_quota": getattr(campaign, "per_guest_photo_quota", None) or 20,
+        "per_guest_photo_quota": None,
     }
 
 
@@ -2339,7 +2340,7 @@ def campaign_gallery(db: Session, campaign: GuestCampaign, limit: int = 60) -> l
 
 @app.post("/circles/{circle_id}/campaigns")
 def create_campaign(circle_id: int, payload: CampaignIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    require_member(db, circle_id, user, {"owner"})
+    require_member(db, circle_id, user, EDIT_ROLES)
     campaign = GuestCampaign(
         circle_id=circle_id,
         token=secrets.token_urlsafe(24),
@@ -2359,7 +2360,7 @@ def create_campaign(circle_id: int, payload: CampaignIn, db: Session = Depends(g
 
 @app.get("/circles/{circle_id}/campaigns")
 def list_campaigns(circle_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    require_member(db, circle_id, user, {"owner"})
+    require_member(db, circle_id, user, EDIT_ROLES)
     campaigns = db.scalars(
         select(GuestCampaign).where(GuestCampaign.circle_id == circle_id).order_by(GuestCampaign.created_at.desc())
     ).all()
@@ -2368,7 +2369,7 @@ def list_campaigns(circle_id: int, db: Session = Depends(get_db), user: User = D
 
 @app.patch("/circles/{circle_id}/campaigns/{campaign_id}")
 def patch_campaign(circle_id: int, campaign_id: int, payload: CampaignPatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    require_member(db, circle_id, user, {"owner"})
+    require_member(db, circle_id, user, EDIT_ROLES)
     campaign = db.get(GuestCampaign, campaign_id)
     if not campaign or campaign.circle_id != circle_id:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -2382,7 +2383,7 @@ def patch_campaign(circle_id: int, campaign_id: int, payload: CampaignPatch, db:
 
 @app.post("/circles/{circle_id}/campaigns/{campaign_id}/revoke")
 def revoke_campaign(circle_id: int, campaign_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    require_member(db, circle_id, user, {"owner"})
+    require_member(db, circle_id, user, EDIT_ROLES)
     campaign = db.get(GuestCampaign, campaign_id)
     if not campaign or campaign.circle_id != circle_id:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -2484,14 +2485,6 @@ def guest_upload(
     )
     if not session or not session.verified:
         raise HTTPException(status_code=403, detail="Please confirm your details before uploading")
-    already = db.scalar(
-        select(func.count(MemoryItem.id)).where(
-            MemoryItem.campaign_id == campaign.id,
-            MemoryItem.guest_email == session.guest_email,
-        )
-    )
-    if (already or 0) >= GUEST_UPLOAD_LIMIT:
-        raise HTTPException(status_code=429, detail="You've reached the upload limit for this event")
     asset = store_asset_bytes(
         db,
         campaign.circle_id,
@@ -2589,7 +2582,7 @@ def contribution_schema(campaign: GuestCampaign) -> dict:
         "enabled_types": [t for t in settings.get("enabled_types", []) if t in CONTRIBUTION_TYPES],
         "profile_required_fields": settings.get("profile_required_fields", []),
         "per_guest_text_quota": settings.get("per_guest_text_quota", 5),
-        "per_guest_photo_quota": getattr(campaign, "per_guest_photo_quota", None) or 20,
+        "per_guest_photo_quota": None,
     }
 
 
@@ -2695,8 +2688,8 @@ def campaign_validation(db: Session, campaign: GuestCampaign) -> dict:
     return {"can_publish": not errors, "errors": errors}
 
 
-def require_owner_campaign(db: Session, circle_id: int, campaign_id: int, user: User) -> GuestCampaign:
-    require_member(db, circle_id, user, {"owner"})
+def require_editor_campaign(db: Session, circle_id: int, campaign_id: int, user: User) -> GuestCampaign:
+    require_member(db, circle_id, user, EDIT_ROLES)
     campaign = db.get(GuestCampaign, campaign_id)
     if not campaign or campaign.circle_id != circle_id:
         raise HTTPException(status_code=404, detail="Campaign not found")
@@ -2738,7 +2731,7 @@ def queue_contribution_notifications(db: Session, campaign: GuestCampaign, contr
 
 @app.get("/circles/{circle_id}/theme-presets")
 def list_theme_presets(circle_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    require_member(db, circle_id, user, {"owner"})
+    require_member(db, circle_id, user, EDIT_ROLES)
     presets = db.scalars(
         select(ThemePreset).where(ThemePreset.circle_id == circle_id, ThemePreset.archived_at.is_(None))
     ).all()
@@ -2747,7 +2740,7 @@ def list_theme_presets(circle_id: int, db: Session = Depends(get_db), user: User
 
 @app.patch("/circles/{circle_id}/theme-presets/{preset_id}")
 def patch_theme_preset(circle_id: int, preset_id: int, payload: ThemePresetPatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    require_member(db, circle_id, user, {"owner"})
+    require_member(db, circle_id, user, EDIT_ROLES)
     preset = db.get(ThemePreset, preset_id)
     if not preset or preset.circle_id != circle_id:
         raise HTTPException(status_code=404, detail="Theme not found")
@@ -2784,7 +2777,7 @@ def upload_brand_asset(
     db: Session = Depends(get_db),
     user: User = Depends(current_user),
 ):
-    require_member(db, circle_id, user, {"owner"})
+    require_member(db, circle_id, user, EDIT_ROLES)
     preset = db.get(ThemePreset, preset_id)
     if not preset or preset.circle_id != circle_id:
         raise HTTPException(status_code=404, detail="Theme not found")
@@ -2858,7 +2851,7 @@ def upload_brand_asset(
 
 @app.post("/circles/{circle_id}/campaigns/from-preset")
 def create_campaign_from_preset(circle_id: int, payload: CampaignFromPresetIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    require_member(db, circle_id, user, {"owner"})
+    require_member(db, circle_id, user, EDIT_ROLES)
     if payload.preset != "university_graduation":
         raise HTTPException(status_code=400, detail="Unknown campaign preset")
     preset = ThemePreset(
@@ -2897,7 +2890,7 @@ def create_campaign_from_preset(circle_id: int, payload: CampaignFromPresetIn, d
 
 @app.get("/circles/{circle_id}/campaigns/{campaign_id}/studio")
 def campaign_studio(circle_id: int, campaign_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    campaign = require_owner_campaign(db, circle_id, campaign_id, user)
+    campaign = require_editor_campaign(db, circle_id, campaign_id, user)
     data = serialize_campaign(db, campaign)
     data["consent_text"] = getattr(campaign, "consent_text", "") or ""
     data["contribution_settings"] = campaign_settings(campaign)
@@ -2913,7 +2906,7 @@ def campaign_studio(circle_id: int, campaign_id: int, db: Session = Depends(get_
 
 @app.patch("/circles/{circle_id}/campaigns/{campaign_id}/details")
 def patch_campaign_details(circle_id: int, campaign_id: int, payload: CampaignDetailsPatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    campaign = require_owner_campaign(db, circle_id, campaign_id, user)
+    campaign = require_editor_campaign(db, circle_id, campaign_id, user)
     if payload.title is not None:
         campaign.title = payload.title.strip()[:220] or campaign.title
     if payload.note is not None:
@@ -2936,7 +2929,7 @@ def patch_campaign_details(circle_id: int, campaign_id: int, payload: CampaignDe
 
 @app.patch("/circles/{circle_id}/campaigns/{campaign_id}/contribution-settings")
 def patch_contribution_settings(circle_id: int, campaign_id: int, payload: ContributionSettingsPatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    campaign = require_owner_campaign(db, circle_id, campaign_id, user)
+    campaign = require_editor_campaign(db, circle_id, campaign_id, user)
     settings = campaign_settings(campaign)
     changes = payload.model_dump(exclude_unset=True)
     if "enabled_types" in changes:
@@ -2962,7 +2955,7 @@ def patch_contribution_settings(circle_id: int, campaign_id: int, payload: Contr
 
 @app.post("/circles/{circle_id}/campaigns/{campaign_id}/publish")
 def publish_campaign(circle_id: int, campaign_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    campaign = require_owner_campaign(db, circle_id, campaign_id, user)
+    campaign = require_editor_campaign(db, circle_id, campaign_id, user)
     validation = campaign_validation(db, campaign)
     if not validation["can_publish"]:
         raise HTTPException(status_code=400, detail={"errors": validation["errors"]})
@@ -3343,7 +3336,10 @@ def create_contribution(token: str, payload: ContributionIn, db: Session = Depen
         if not asset or asset.circle_id != campaign.circle_id:
             raise HTTPException(status_code=400, detail={"errors": ["asset.wrong_circle"]})
     quota = campaign_quota_usage(db, campaign)
-    if quota["contributions_used"] >= quota["contributions_limit"]:
+    if (
+        payload.contribution_type != "photo_memory"
+        and quota["contributions_used"] >= quota["contributions_limit"]
+    ):
         raise HTTPException(status_code=429, detail="This event has reached its submission limit")
     mine = db.scalars(
         select(CampaignContribution).where(
@@ -3352,11 +3348,7 @@ def create_contribution(token: str, payload: ContributionIn, db: Session = Depen
             CampaignContribution.moderation_status.notin_(["rejected", "withdrawn"]),
         )
     ).all()
-    if payload.contribution_type == "photo_memory":
-        photos = sum(1 for m in mine if m.contribution_type == "photo_memory")
-        if photos >= quota["per_guest_photo_quota"]:
-            raise HTTPException(status_code=429, detail="You've reached the photo limit for this event")
-    else:
+    if payload.contribution_type != "photo_memory":
         texts = sum(1 for m in mine if m.contribution_type != "photo_memory")
         if texts >= settings.get("per_guest_text_quota", 5):
             raise HTTPException(status_code=429, detail="You've reached the submission limit for this event")

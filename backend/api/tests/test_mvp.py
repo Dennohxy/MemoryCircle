@@ -939,6 +939,7 @@ def test_guest_campaign_upload_flow(client):
                            headers=auth(owner)).json()
     token = campaign["token"]
     assert campaign["is_open"] is True
+    assert campaign["quota"]["per_guest_photo_quota"] is None
 
     reg = client.post(f"/campaigns/{token}/guest", json={"name": "Aunt May", "email": "may@guest.com"})
     assert reg.status_code == 200, reg.text
@@ -981,9 +982,75 @@ def test_guest_campaign_email_verification(client):
     assert "guest_token" in reg.json()
 
 
-def test_only_owner_manages_campaigns(client):
+def test_reviewer_does_not_manage_campaigns(client):
     circle_id, _owner, approver, _contributor, _viewer = setup_circle(client)
     assert client.post(f"/circles/{circle_id}/campaigns", json={"title": "X"}, headers=auth(approver)).status_code == 403
+
+
+def test_editor_can_edit_circle_campaigns_and_albums_but_not_members(client):
+    circle_id, owner, _approver, contributor, _viewer = setup_circle(client)
+    client.post(
+        f"/circles/{circle_id}/invites",
+        json={"email": "editor@test.com", "display_name": "Editor", "role": "editor"},
+        headers=auth(owner),
+    )
+    editor = client.post(
+        "/auth/login",
+        json={"email": "editor@test.com", "password": "ChangeMe123!"},
+    ).json()["token"]
+    client.post(f"/circles/{circle_id}/membership/accept", headers=auth(editor))
+
+    renamed = client.patch(
+        f"/circles/{circle_id}",
+        json={"name": "Edited Circle"},
+        headers=auth(editor),
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()["name"] == "Edited Circle"
+
+    campaign = client.post(
+        f"/circles/{circle_id}/campaigns",
+        json={"title": "Open Event"},
+        headers=auth(editor),
+    )
+    assert campaign.status_code == 200, campaign.text
+
+    album = client.post(
+        f"/circles/{circle_id}/albums",
+        json={"title": "Editor Album"},
+        headers=auth(editor),
+    )
+    assert album.status_code == 200, album.text
+
+    share = client.post(
+        f"/circles/{circle_id}/albums/{album.json()['id']}/share-packages",
+        json={"title": "Editor Share", "access_type": "saved"},
+        headers=auth(editor),
+    )
+    assert share.status_code == 200, share.text
+    revoked = client.post(
+        f"/circles/{circle_id}/albums/{album.json()['id']}/share-packages/{share.json()['id']}/revoke",
+        headers=auth(editor),
+    )
+    assert revoked.status_code == 200, revoked.text
+
+    denied = client.post(
+        f"/circles/{circle_id}/invites",
+        json={"email": "blocked-editor@test.com", "role": "viewer"},
+        headers=auth(editor),
+    )
+    assert denied.status_code == 403
+    assert client.get(
+        f"/circles/{circle_id}/join-requests",
+        headers=auth(editor),
+    ).status_code == 403
+
+    contributor_edit = client.patch(
+        f"/circles/{circle_id}",
+        json={"name": "Contributor Edit"},
+        headers=auth(contributor),
+    )
+    assert contributor_edit.status_code == 403
 
 
 def test_campaign_gallery_shows_only_campaign_photos(client):
@@ -1035,6 +1102,7 @@ def test_graduation_yearbook_pilot_end_to_end(client):
     campaign_id, token = campaign["id"], campaign["token"]
     assert campaign["campaign_type"] == "university_graduation"
     assert "theme.logo_required" in campaign["validation"]["errors"]
+    assert campaign["quota"]["per_guest_photo_quota"] is None
 
     # Upload the university logo with rights confirmed, then publish.
     preset_id = campaign["theme_preset_id"]
@@ -1047,6 +1115,8 @@ def test_graduation_yearbook_pilot_end_to_end(client):
     assert logo.status_code == 200, logo.text
     published = client.post(f"/circles/{circle_id}/campaigns/{campaign_id}/publish", headers=auth(owner))
     assert published.status_code == 200, published.text
+    landing = client.get(f"/campaigns/{token}").json()
+    assert landing["contribution_schema"]["per_guest_photo_quota"] is None
     assert published.json()["status"] == "published"
 
     # A graduate registers (consent accepted) and submits a profile,

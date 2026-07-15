@@ -13,6 +13,11 @@ Authentication uses bearer tokens returned by:
 
 Circle and role endpoints:
 
+Roles are `owner`, `editor`, `approver`, `contributor`, and `viewer`.
+Editors can edit circle details, campaigns/events, memories, approvals,
+albums, and album shares, but cannot manage members, invite links, join
+requests, inactivity removals, or circle merges.
+
 - `POST /circles`
 - `GET /circles`
 - `GET /circles/{circle_id}`
@@ -33,8 +38,8 @@ keeps their higher role — and the source circle is archived (`status`
 `archived`, hidden from lists and search, not deleted).
 
 Member inactivity, derived from the activity log (owner always exempt): a
-member idle **>=30 days** is auto-demoted one role step (approver → contributor
-→ viewer) when the owner next opens the roster or `apply-inactivity` runs; a
+member idle **>=30 days** is auto-demoted one role step (editor → approver →
+contributor → viewer) when the owner next opens the roster or `apply-inactivity` runs; a
 member idle **>=90 days** is flagged (`inactivity_tier: "flagged"` on the
 member payload) for the owner to remove. Members carry `last_active_at` and
 `inactivity_tier` (`active`/`demote`/`flagged`).
@@ -57,7 +62,7 @@ Assets and memories:
 - `POST /circles/{circle_id}/memories/{memory_id}/request-changes`
 
 Photo approval is consensus-based among reviewers. A submitted memory stays
-`pending` until every active owner and approver has approved it (founder
+`pending` until every active owner, editor, and approver has approved it (founder
 decision 2026-07-08: contributors and viewers do not vote, so a passive member
 cannot stall an album). The approve endpoint records the current reviewer's
 vote; no single reviewer, including the owner, can override the rest. Memory
@@ -86,8 +91,8 @@ to generated album pages, not proposals.
 
 - `GET /circles/{circle_id}/albums`
 - `GET /circles/{circle_id}/albums/{album_id}`
-- `PATCH /circles/{circle_id}/albums/{album_id}` (title, description, target count, cover, sequence; owner or reviewer)
-- `POST /circles/{circle_id}/albums/{album_id}/retire` (request removal; owner/reviewer)
+- `PATCH /circles/{circle_id}/albums/{album_id}` (title, description, target count, cover, sequence; owner, editor, or reviewer)
+- `POST /circles/{circle_id}/albums/{album_id}/retire` (request removal; owner/editor/reviewer)
 - `POST /circles/{circle_id}/albums/{album_id}/retire/approve` (approve a pending removal)
 - `POST /circles/{circle_id}/albums/{album_id}/retire/cancel` (keep the album)
 - `POST /circles/{circle_id}/albums/{album_id}/pages/generate`

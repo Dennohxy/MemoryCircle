@@ -92,6 +92,7 @@ extension I18nContext on BuildContext {
 extension LocalizedCircleRole on CircleRole {
   String localizedLabel(BuildContext context) => switch (this) {
         CircleRole.owner => context.t('roles.owner'),
+        CircleRole.editor => context.t('roles.editor'),
         CircleRole.approver => context.t('roles.approver'),
         CircleRole.contributor => context.t('roles.contributor'),
         CircleRole.viewer => context.t('roles.viewer'),
@@ -99,6 +100,7 @@ extension LocalizedCircleRole on CircleRole {
 
   String localizedDescription(BuildContext context) => switch (this) {
         CircleRole.owner => context.t('roles.ownerDescription'),
+        CircleRole.editor => context.t('roles.editorDescription'),
         CircleRole.approver => context.t('roles.approverDescription'),
         CircleRole.contributor => context.t('roles.contributorDescription'),
         CircleRole.viewer => context.t('roles.viewerDescription'),

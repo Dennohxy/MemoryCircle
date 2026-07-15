@@ -117,10 +117,10 @@ class _CircleShellState extends State<CircleShell> {
           label: context.t('nav.members'),
           icon: Icons.group_outlined
         ),
-        if (role.isOwner)
+        if (role.canEdit)
           (
             section: CircleSection.campaigns,
-            label: 'Guest Uploads',
+            label: 'Campaigns',
             icon: Icons.qr_code_2_outlined
           ),
         (
@@ -143,7 +143,7 @@ class _CircleShellState extends State<CircleShell> {
         CircleSection.review => context.t('nav.review'),
         CircleSection.albums => context.t('nav.albums'),
         CircleSection.members => context.t('nav.members'),
-        CircleSection.campaigns => 'Guest Uploads',
+        CircleSection.campaigns => 'Campaigns',
         CircleSection.health => context.t('nav.health'),
         CircleSection.settings => context.t('nav.settings'),
       };

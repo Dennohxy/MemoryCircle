@@ -53,6 +53,7 @@ python3 -m app.seed
 Demo users use password `Password123!`:
 
 - `owner@example.com`
+- `editor@example.com`
 - `approver@example.com`
 - `contributor@example.com`
 - `viewer@example.com`

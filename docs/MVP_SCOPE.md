@@ -5,7 +5,7 @@ Included:
 - Register/login.
 - Create circles.
 - Invite or simulate members.
-- Assign owner, approver, contributor, and viewer roles.
+- Assign owner, editor, approver, contributor, and viewer roles.
 - Upload local images.
 - Generate thumbnail and display copies.
 - Submit, approve, reject, or request changes for memories.

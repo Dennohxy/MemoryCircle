@@ -9,6 +9,7 @@ from .main import app
 
 USERS = {
     "owner": ("Owner Otieno", "owner@example.com", "Password123!"),
+    "editor": ("Editor Otieno", "editor@example.com", "Password123!"),
     "approver": ("Approver Otieno", "approver@example.com", "Password123!"),
     "contributor": ("Contributor Otieno", "contributor@example.com", "Password123!"),
     "viewer": ("Viewer Otieno", "viewer@example.com", "Password123!"),
@@ -48,11 +49,11 @@ def run_seed(reset: bool = False):
         headers=headers,
     ).json()
     circle_id = circle["id"]
-    for key, role in [("approver", "approver"), ("contributor", "contributor"), ("viewer", "viewer")]:
+    for key, role in [("editor", "editor"), ("approver", "approver"), ("contributor", "contributor"), ("viewer", "viewer")]:
         name, email, _ = USERS[key]
         client.post(f"/circles/{circle_id}/invites", json={"display_name": name, "email": email, "role": role}, headers=headers)
     member_headers = [headers]
-    for key in ("approver", "contributor", "viewer"):
+    for key in ("editor", "approver", "contributor", "viewer"):
         member_headers.append({"Authorization": f"Bearer {register(client, key)}"})
     statuses = ["approved"] * 8 + ["pending", "rejected"]
     for index, status in enumerate(statuses, start=1):

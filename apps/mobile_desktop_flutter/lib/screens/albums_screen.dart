@@ -333,7 +333,7 @@ class _AlbumsViewState extends State<AlbumsView> {
                           _AlbumCover(
                             album: album,
                             canManage: widget.role.canReview,
-                            canShare: widget.role.isOwner,
+                            canShare: widget.role.canEdit,
                             canAddPhotos: widget.role.canContribute,
                             currentUserId: widget.api.currentUser?.id,
                             onOpen: () => _openAlbum(album),
