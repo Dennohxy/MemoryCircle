@@ -5,6 +5,7 @@ import '../api/models.dart';
 import '../app/theme.dart';
 import 'authed_image.dart';
 import 'scrapbook_decor.dart';
+import 'yearbook_page_view.dart';
 
 /// Renders one album page from its layout template (`event_title`,
 /// `one_photo_feature`, `two_photo_story`, `four_photo_grid`) as a
@@ -25,6 +26,15 @@ class AlbumPageView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Themed yearbook pages (schema_version 2) carry their own visual rules
+    // and skip the family scrapbook treatment entirely.
+    if ((page.layout['schema_version'] as num?)?.toInt() == 2) {
+      return YearbookPageView(
+        api: api,
+        page: page,
+        showPageNumber: showPageNumber,
+      );
+    }
     final template = page.layout['template'] as String? ?? '';
     final isTitle = template == 'event_title';
     final seed = page.id * 131 + page.pageNumber * 7;
@@ -261,6 +271,20 @@ class _MemoriesLayout extends StatelessWidget {
       return _PairLayout(api: api, entries: entries, palette: palette);
     }
     return _GridLayout(api: api, entries: entries, palette: palette);
+  }
+}
+
+/// Public adapter so the yearbook renderer reuses the orientation-aware
+/// mosaic rows without duplicating the layout logic.
+class MosaicRowsView extends StatelessWidget {
+  const MosaicRowsView({super.key, required this.api, required this.rows});
+
+  final ApiClient api;
+  final List<dynamic> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return _MosaicLayout(api: api, rows: rows, palette: scrapbookPaletteFor(1));
   }
 }
 

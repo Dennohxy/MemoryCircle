@@ -3,6 +3,47 @@
 Use this log for short handoffs between human maintainers, Codex, and Claude.
 Newest entry goes at the top.
 
+## 2026-07-16 - Codex (yearbook renderer picked up)
+
+Branch: `perf/image-loading`
+
+Owner: Codex
+
+Intent: Continue Claude's remaining Flutter pilot work from the yearbook
+backend handoff, starting with the schema_version-2 album renderer.
+
+Progress:
+- Added the AlbumPageView schema_version-2 dispatch path to
+  `YearbookPageView`.
+- Added `yearbook_page_view.dart` renderer coverage for graduation cover,
+  official message, graduate profile single/pair, photo mosaic, dedication
+  grid, typed signature grid, acknowledgements, and graduation back cover.
+- Exposed `MosaicRowsView` so yearbook photo-mosaic pages reuse the existing
+  orientation-aware album row layout.
+- Added widget smoke tests proving schema v2 cover/profile pages render through
+  the themed yearbook path.
+
+Checks run:
+- `flutter analyze lib/widgets/album_page_view.dart lib/widgets/yearbook_page_view.dart test/album_page_test.dart`
+- `flutter test test/album_page_test.dart`
+- `flutter analyze`
+
+Full `flutter test` note: it is currently blocked by Flutter tool crashes on
+the external volume while cleaning generated native-assets AppleDouble files
+(`build/native_assets/macos/._native_assets.json`). A separate retry also found
+and removed `test/._album_page_test.dart`, but the native-assets crash remains.
+
+Remaining for the pilot (Flutter, unclaimed):
+1. Guest structured forms in `guest_campaign_screen.dart`: consent step, type
+   picker, profile/dedication/signature forms against
+   `GET /campaigns/{token}` -> `contribution_schema`, contributor endpoints
+   (`/contributors`, `/contributors/verify`, `/contribution-assets`,
+   `/contributions` CRUD + withdraw).
+2. Owner studio in `campaigns_screen.dart`: create-from-preset, details,
+   branding upload (kind + rights_confirmed multipart), publish preflight
+   (`validation.errors`), moderation list + approve/reject/request-changes,
+   and a "Generate yearbook" action.
+
 ## 2026-07-16 - Claude (yearbook pilot backend complete)
 
 Branch: `perf/image-loading`, deployed to `main` @ `2550c5d`.
