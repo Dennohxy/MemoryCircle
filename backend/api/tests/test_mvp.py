@@ -984,3 +984,34 @@ def test_guest_campaign_email_verification(client):
 def test_only_owner_manages_campaigns(client):
     circle_id, _owner, approver, _contributor, _viewer = setup_circle(client)
     assert client.post(f"/circles/{circle_id}/campaigns", json={"title": "X"}, headers=auth(approver)).status_code == 403
+
+
+def test_campaign_gallery_shows_only_campaign_photos(client):
+    # A circle's own private memories must never appear on a guest link.
+    circle_id, owner, approver, _contributor, _viewer = setup_circle(client)
+    _asset, memory = upload_memory(client, circle_id, owner, status="pending")
+    approve_all_reviewers(client, circle_id, memory["id"], owner, approver)
+
+    campaign = client.post(f"/circles/{circle_id}/campaigns",
+                           json={"title": "Open day", "require_email_verify": False},
+                           headers=auth(owner)).json()
+    token = campaign["token"]
+
+    # The circle's approved family photo is NOT in the guest gallery...
+    assert client.get(f"/campaigns/{token}").json()["gallery"] == []
+    # ...and its asset is not reachable through the campaign asset route.
+    asset_id = memory["asset_id"]
+    leaked = client.get(f"/campaigns/{token}/assets/{asset_id}/thumbnail")
+    assert leaked.status_code == 404
+
+    # A photo contributed through the campaign IS visible once approved.
+    reg = client.post(f"/campaigns/{token}/guest", json={"name": "Guest", "email": "g2@guest.com"})
+    up = client.post(f"/campaigns/{token}/upload",
+                     data={"guest_token": reg.json()["guest_token"]},
+                     files={"file": ("c.jpg", image_file(color=(9, 9, 9)), "image/jpeg")})
+    assert up.status_code == 200, up.text
+    pending = client.get(f"/circles/{circle_id}/memories?status=pending", headers=auth(owner)).json()
+    guest_mem = next(m for m in pending if m.get("guest_name") == "Guest")
+    approve_all_reviewers(client, circle_id, guest_mem["id"], owner, approver)
+    gallery = client.get(f"/campaigns/{token}").json()["gallery"]
+    assert len(gallery) == 1

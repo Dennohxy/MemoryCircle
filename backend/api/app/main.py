@@ -2162,10 +2162,16 @@ def require_open_campaign(db: Session, token: str) -> GuestCampaign:
 
 
 def campaign_gallery(db: Session, campaign: GuestCampaign, limit: int = 60) -> list[dict]:
-    """Approved memories in the campaign's circle, with guest-safe image URLs."""
+    """Approved memories from THIS campaign only, with guest-safe image URLs.
+    Guests must never see the circle's private memories — only what fellow
+    guests contributed through the same link."""
     memories = db.scalars(
         select(MemoryItem)
-        .where(MemoryItem.circle_id == campaign.circle_id, MemoryItem.approval_status == "approved")
+        .where(
+            MemoryItem.circle_id == campaign.circle_id,
+            MemoryItem.campaign_id == campaign.id,
+            MemoryItem.approval_status == "approved",
+        )
         .order_by(MemoryItem.created_at.desc())
         .limit(limit)
     ).all()
@@ -2354,11 +2360,13 @@ def get_campaign_asset(token: str, asset_id: int, variant: str, db: Session = De
     asset = db.get(PhotoAsset, asset_id)
     if not asset or asset.circle_id != campaign.circle_id:
         raise HTTPException(status_code=404, detail="Asset not found")
-    # Only serve assets tied to an approved memory in the circle.
+    # Only serve assets tied to an approved memory from THIS campaign; a
+    # campaign link must never expose the circle's private photos.
     approved = db.scalar(
         select(MemoryItem.id).where(
             MemoryItem.asset_id == asset_id,
             MemoryItem.circle_id == campaign.circle_id,
+            MemoryItem.campaign_id == campaign.id,
             MemoryItem.approval_status == "approved",
         )
     )
