@@ -181,6 +181,16 @@ class Album(Base):
     target_photo_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     cover_memory_id: Mapped[Optional[int]] = mapped_column(ForeignKey("memory_items.id"), nullable=True)
     memory_sequence_json: Mapped[str] = mapped_column(Text, default="[]")
+    # Yearbook pilot fields; `classic` albums behave exactly as before.
+    album_kind: Mapped[str] = mapped_column(String(60), default="classic")
+    campaign_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    theme_preset_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    theme_snapshot_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    theme_snapshot_version: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    publication_status: Mapped[str] = mapped_column(String(40), default="draft")
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    quota_policy: Mapped[str] = mapped_column(String(40), default="circle_members")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     # Removal needs approval from all album managers; "active" or
     # "pending_removal". Votes hold the approving user ids.
@@ -296,6 +306,130 @@ class GuestCampaign(Base):
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     require_email_verify: Mapped[bool] = mapped_column(Boolean, default=True)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Yearbook pilot fields. `photo_collection` campaigns behave exactly as
+    # before; `university_graduation` campaigns add structured contributions.
+    campaign_type: Mapped[str] = mapped_column(String(60), default="photo_collection")
+    theme_preset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("theme_presets.id"), nullable=True)
+    details_json: Mapped[str] = mapped_column(Text, default="{}")
+    contribution_settings_json: Mapped[str] = mapped_column(Text, default="{}")
+    consent_text: Mapped[str] = mapped_column(Text, default="")
+    consent_version: Mapped[int] = mapped_column(Integer, default=0)
+    # `draft` -> `published` -> `closed`/`archived`. Legacy photo campaigns
+    # are treated as published.
+    status: Mapped[str] = mapped_column(String(40), default="published")
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    linked_album_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    participant_quota: Mapped[int] = mapped_column(Integer, default=250)
+    total_contribution_quota: Mapped[int] = mapped_column(Integer, default=1500)
+    per_guest_photo_quota: Mapped[int] = mapped_column(Integer, default=20)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class ThemePreset(Base):
+    """A circle-owned, versioned set of constrained visual rules (colors,
+    typography preset, cover/header/footer variants) plus brand asset refs."""
+
+    __tablename__ = "theme_presets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    circle_id: Mapped[int] = mapped_column(ForeignKey("memory_circles.id"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    preset_kind: Mapped[str] = mapped_column(String(60), default="university_graduation")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    tokens_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class BrandAsset(Base):
+    """An owner-uploaded brand image (logo, cover, background) scoped to a
+    circle and theme preset. Served only through authorized routes."""
+
+    __tablename__ = "brand_assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    circle_id: Mapped[int] = mapped_column(ForeignKey("memory_circles.id"), index=True)
+    theme_preset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("theme_presets.id"), nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    mime_type: Mapped[str] = mapped_column(String(80))
+    width: Mapped[int] = mapped_column(Integer, default=0)
+    height: Mapped[int] = mapped_column(Integer, default=0)
+    file_size: Mapped[int] = mapped_column(Integer, default=0)
+    content_hash: Mapped[str] = mapped_column(String(128), index=True)
+    display_path: Mapped[str] = mapped_column(String(500), default="")
+    display_blob: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    rights_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class CampaignContributor(Base):
+    """A guest's durable identity inside one campaign: name + verified email,
+    consent evidence, and a campaign-scoped token for submissions."""
+
+    __tablename__ = "campaign_contributors"
+    __table_args__ = (UniqueConstraint("campaign_id", "guest_email", name="campaign_contributor_email_unique"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    campaign_id: Mapped[int] = mapped_column(ForeignKey("guest_campaigns.id"), index=True)
+    guest_name: Mapped[str] = mapped_column(String(160))
+    guest_email: Mapped[str] = mapped_column(String(255), index=True)
+    token: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    verification_status: Mapped[str] = mapped_column(String(40), default="unverified")
+    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    verify_code: Mapped[str] = mapped_column(String(12), default="")
+    verify_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    consent_version: Mapped[int] = mapped_column(Integer, default=0)
+    consented_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    withdrawn_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class CampaignContribution(Base):
+    """One structured guest submission: a photo memory, graduate profile,
+    dedication, official message, typed signature, or acknowledgement."""
+
+    __tablename__ = "campaign_contributions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    campaign_id: Mapped[int] = mapped_column(ForeignKey("guest_campaigns.id"), index=True)
+    contributor_id: Mapped[int] = mapped_column(ForeignKey("campaign_contributors.id"), index=True)
+    contribution_type: Mapped[str] = mapped_column(String(60), index=True)
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("photo_assets.id"), nullable=True)
+    signature_asset_id: Mapped[Optional[int]] = mapped_column(ForeignKey("photo_assets.id"), nullable=True)
+    moderation_status: Mapped[str] = mapped_column(String(40), default="pending", index=True)
+    votes_json: Mapped[str] = mapped_column(Text, default="[]")
+    visibility: Mapped[str] = mapped_column(String(40), default="yearbook")
+    display_name: Mapped[str] = mapped_column(String(160), default="")
+    consent_version: Mapped[int] = mapped_column(Integer, default=0)
+    consented_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    sort_hint: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class YearbookSection(Base):
+    """An ordered section of a yearbook album (cover, profiles, mosaic,
+    dedications, signatures...). Content rules live in JSON; pages are
+    generated from them per revision."""
+
+    __tablename__ = "yearbook_sections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    album_id: Mapped[int] = mapped_column(ForeignKey("albums.id"), index=True)
+    section_type: Mapped[str] = mapped_column(String(60))
+    title: Mapped[str] = mapped_column(String(220), default="")
+    subtitle: Mapped[str] = mapped_column(String(220), default="")
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    layout_variant: Mapped[str] = mapped_column(String(60), default="standard")
+    settings_json: Mapped[str] = mapped_column(Text, default="{}")
+    source_rule_json: Mapped[str] = mapped_column(Text, default="{}")
+    manual_content_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
 

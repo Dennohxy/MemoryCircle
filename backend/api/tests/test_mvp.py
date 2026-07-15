@@ -1015,3 +1015,100 @@ def test_campaign_gallery_shows_only_campaign_photos(client):
     approve_all_reviewers(client, circle_id, guest_mem["id"], owner, approver)
     gallery = client.get(f"/campaigns/{token}").json()["gallery"]
     assert len(gallery) == 1
+
+
+def test_graduation_yearbook_pilot_end_to_end(client):
+    circle_id, owner, approver, _contributor, _viewer = setup_circle(client)
+
+    # Owner creates a graduation campaign from the preset.
+    campaign = client.post(
+        f"/circles/{circle_id}/campaigns/from-preset",
+        json={
+            "preset": "university_graduation",
+            "title": "GRIPS MP2 Graduation 2026",
+            "details": {"university": "GRIPS", "cohort": "Class of 2026",
+                        "graduation_date": "2026-09-18"},
+            "require_email_verify": False,
+        },
+        headers=auth(owner),
+    ).json()
+    campaign_id, token = campaign["id"], campaign["token"]
+    assert campaign["campaign_type"] == "university_graduation"
+    assert "theme.logo_required" in campaign["validation"]["errors"]
+
+    # Upload the university logo with rights confirmed, then publish.
+    preset_id = campaign["theme_preset_id"]
+    logo = client.post(
+        f"/circles/{circle_id}/theme-presets/{preset_id}/assets",
+        data={"kind": "logo", "rights_confirmed": "true"},
+        files={"file": ("crest.png", image_file(size=(800, 800)), "image/png")},
+        headers=auth(owner),
+    )
+    assert logo.status_code == 200, logo.text
+    published = client.post(f"/circles/{circle_id}/campaigns/{campaign_id}/publish", headers=auth(owner))
+    assert published.status_code == 200, published.text
+    assert published.json()["status"] == "published"
+
+    # A graduate registers (consent accepted) and submits a profile,
+    # a dedication, a typed signature, and a photo.
+    reg = client.post(f"/campaigns/{token}/contributors",
+                      json={"name": "Amina Kamau", "email": "amina@grad.com", "accept_consent": True})
+    assert reg.status_code == 200, reg.text
+    contributor_token = reg.json()["contributor_token"]
+
+    asset = client.post(f"/campaigns/{token}/contribution-assets",
+                        data={"contributor_token": contributor_token},
+                        files={"file": ("grad.jpg", image_file(color=(9, 9, 99)), "image/jpeg")}).json()
+
+    submissions = [
+        {"contribution_type": "graduate_profile",
+         "payload": {"full_name": "Amina Kamau", "programme": "MP2", "quote": "Build with care."}},
+        {"contribution_type": "dedication",
+         "payload": {"message": "To our families.", "from_name": "Class of 2026"}},
+        {"contribution_type": "typed_signature", "payload": {"text": "Amina", "style": "clean_script"}},
+        {"contribution_type": "photo_memory", "payload": {"caption": "Last seminar"}, "asset_id": asset["asset_id"]},
+    ]
+    ids = []
+    for submission in submissions:
+        response = client.post(f"/campaigns/{token}/contributions",
+                               json={**submission, "contributor_token": contributor_token})
+        assert response.status_code == 200, response.text
+        ids.append(response.json()["id"])
+
+    # Reviewer consensus approves every contribution.
+    for contribution_id in ids:
+        for reviewer in (owner, approver):
+            response = client.post(
+                f"/circles/{circle_id}/campaigns/{campaign_id}/contributions/{contribution_id}/approve",
+                headers=auth(reviewer))
+            assert response.status_code == 200, response.text
+
+    # Generate the themed yearbook.
+    yearbook = client.post(f"/circles/{circle_id}/campaigns/{campaign_id}/yearbook", headers=auth(owner))
+    assert yearbook.status_code == 200, yearbook.text
+    pages = yearbook.json()["pages"]
+    templates = [p["layout_json"]["template"] for p in pages]
+    assert templates[0] == "graduation_cover"
+    assert "graduate_profile_single" in templates
+    assert "dedication_grid" in templates
+    assert "typed_signature_grid" in templates
+    assert "photo_mosaic" in templates
+    assert templates[-1] == "graduation_back_cover"
+    cover = pages[0]["layout_json"]
+    assert cover["schema_version"] == 2
+    assert cover["university"] == "GRIPS"
+    assert cover["theme"]["colors"]["primary"].startswith("#")
+    assert cover["logo_url"], "cover must reference the uploaded logo"
+
+    # Theme snapshot stability: editing the preset does NOT change the album.
+    snapshot_before = yearbook.json()["theme_snapshot_version"] if "theme_snapshot_version" in yearbook.json() else None
+    client.patch(f"/circles/{circle_id}/theme-presets/{preset_id}",
+                 json={"tokens": {"colors": {"primary": "#222222"}}}, headers=auth(owner))
+    album_id = yearbook.json()["id"]
+    fetched = client.get(f"/circles/{circle_id}/albums/{album_id}", headers=auth(owner)).json()
+    kept = fetched["pages"][0]["layout_json"]["theme"]["colors"]["primary"]
+    assert kept != "#222222", "published pages must keep their theme snapshot"
+
+    # Regeneration picks up the new preset color and bumps the revision.
+    regenerated = client.post(f"/circles/{circle_id}/campaigns/{campaign_id}/yearbook", headers=auth(owner))
+    assert regenerated.json()["pages"][0]["layout_json"]["theme"]["colors"]["primary"] == "#222222"

@@ -25,6 +25,9 @@ from .models import (
     ActivityLog,
     Album,
     AlbumPage,
+    BrandAsset,
+    CampaignContribution,
+    CampaignContributor,
     CircleInviteLink,
     CircleJoinRequest,
     CircleMember,
@@ -39,10 +42,22 @@ from .models import (
     PhotoAsset,
     PhotoSource,
     SharePackage,
+    ThemePreset,
     User,
+    YearbookSection,
 )
 from .email import APP_BASE_URL, email_enabled, send_guest_verify_code, send_password_reset
 from .notifications import deliver_notification
+from .yearbook import (
+    BRAND_ASSET_KINDS,
+    BRAND_ASSET_RULES,
+    CONTRIBUTION_TYPES,
+    DEFAULT_CONSENT_TEXT,
+    DEFAULT_CONTRIBUTION_SETTINGS,
+    GRADUATION_TOKENS_DEFAULT,
+    validate_contribution_payload,
+    validate_theme_tokens,
+)
 
 
 STORAGE_ROOT = Path(os.getenv("STORAGE_ROOT", "storage")).resolve()
@@ -162,6 +177,54 @@ def ensure_account_and_campaign_support():
                     connection.execute(text(f"ALTER TABLE memory_items ADD COLUMN {column_name} {definition}"))
 
 
+def ensure_yearbook_support():
+    """Creates the yearbook pilot tables and adds the additive campaign/album
+    columns (docs/GRADUATION_YEARBOOK_DESIGN.md section 14). All changes are
+    nullable-or-defaulted so existing rows keep their current behavior:
+    campaigns backfill as `photo_collection`/published, albums as `classic`
+    with the circle-members quota rule."""
+    for table in ("theme_presets", "brand_assets", "campaign_contributors",
+                  "campaign_contributions", "yearbook_sections"):
+        Base.metadata.tables[table].create(bind=engine, checkfirst=True)
+    inspector = sa_inspect(engine)
+    campaign_additions = {
+        "campaign_type": "VARCHAR(60) DEFAULT 'photo_collection'",
+        "theme_preset_id": "INTEGER",
+        "details_json": "TEXT DEFAULT '{}'",
+        "contribution_settings_json": "TEXT DEFAULT '{}'",
+        "consent_text": "TEXT DEFAULT ''",
+        "consent_version": "INTEGER DEFAULT 0",
+        "status": "VARCHAR(40) DEFAULT 'published'",
+        "published_at": "TIMESTAMP",
+        "linked_album_id": "INTEGER",
+        "participant_quota": "INTEGER DEFAULT 250",
+        "total_contribution_quota": "INTEGER DEFAULT 1500",
+        "per_guest_photo_quota": "INTEGER DEFAULT 20",
+    }
+    album_additions = {
+        "album_kind": "VARCHAR(60) DEFAULT 'classic'",
+        "campaign_id": "INTEGER",
+        "theme_preset_id": "INTEGER",
+        "theme_snapshot_json": "TEXT",
+        "theme_snapshot_version": "INTEGER",
+        "revision": "INTEGER DEFAULT 1",
+        "publication_status": "VARCHAR(40) DEFAULT 'draft'",
+        "published_at": "TIMESTAMP",
+        "quota_policy": "VARCHAR(40) DEFAULT 'circle_members'",
+    }
+    with engine.begin() as connection:
+        if "guest_campaigns" in inspector.get_table_names():
+            existing = {column["name"] for column in inspector.get_columns("guest_campaigns")}
+            for column_name, definition in campaign_additions.items():
+                if column_name not in existing:
+                    connection.execute(text(f"ALTER TABLE guest_campaigns ADD COLUMN {column_name} {definition}"))
+        if "albums" in inspector.get_table_names():
+            existing = {column["name"] for column in inspector.get_columns("albums")}
+            for column_name, definition in album_additions.items():
+                if column_name not in existing:
+                    connection.execute(text(f"ALTER TABLE albums ADD COLUMN {column_name} {definition}"))
+
+
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
@@ -171,6 +234,7 @@ def startup():
     ensure_notification_tables()
     ensure_circle_merge_support()
     ensure_account_and_campaign_support()
+    ensure_yearbook_support()
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
 
@@ -221,6 +285,56 @@ class GuestRegisterIn(BaseModel):
 class GuestVerifyIn(BaseModel):
     email: EmailStr
     code: str
+
+
+class CampaignFromPresetIn(BaseModel):
+    preset: str = "university_graduation"
+    title: str
+    note: str = ""
+    details: dict = {}
+    expires_at: Optional[datetime] = None
+    require_email_verify: bool = True
+
+
+class CampaignDetailsPatch(BaseModel):
+    title: Optional[str] = None
+    note: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    details: Optional[dict] = None
+    consent_text: Optional[str] = None
+
+
+class ContributionSettingsPatch(BaseModel):
+    enabled_types: Optional[list[str]] = None
+    per_guest_text_quota: Optional[int] = None
+    per_guest_photo_quota: Optional[int] = None
+    participant_quota: Optional[int] = None
+    total_contribution_quota: Optional[int] = None
+    profile_required_fields: Optional[list[str]] = None
+
+
+class ThemePresetPatch(BaseModel):
+    name: Optional[str] = None
+    tokens: Optional[dict] = None
+
+
+class ContributorRegisterIn(BaseModel):
+    name: str
+    email: EmailStr
+    accept_consent: bool = False
+
+
+class ContributionIn(BaseModel):
+    contributor_token: str
+    contribution_type: str
+    payload: dict = {}
+    asset_id: Optional[int] = None
+
+
+class ContributionPatch(BaseModel):
+    contributor_token: str
+    payload: Optional[dict] = None
+    asset_id: Optional[int] = None
 
 
 class CircleIn(BaseModel):
@@ -2131,7 +2245,36 @@ def campaign_is_open(campaign: GuestCampaign) -> bool:
         return False
     if campaign.expires_at is not None and campaign.expires_at <= datetime.utcnow():
         return False
+    # Draft/closed yearbook campaigns are not open to guests; legacy photo
+    # campaigns default to published.
+    if (getattr(campaign, "status", None) or "published") != "published":
+        return False
     return True
+
+
+def campaign_settings(campaign: GuestCampaign) -> dict:
+    merged = dict(DEFAULT_CONTRIBUTION_SETTINGS)
+    merged.update(json.loads(getattr(campaign, "contribution_settings_json", None) or "{}"))
+    return merged
+
+
+def campaign_quota_usage(db: Session, campaign: GuestCampaign) -> dict:
+    participants = db.scalar(
+        select(func.count(CampaignContributor.id)).where(CampaignContributor.campaign_id == campaign.id)
+    ) or 0
+    contributions = db.scalar(
+        select(func.count(CampaignContribution.id)).where(
+            CampaignContribution.campaign_id == campaign.id,
+            CampaignContribution.moderation_status.notin_(["rejected", "withdrawn"]),
+        )
+    ) or 0
+    return {
+        "participants_used": participants,
+        "participants_limit": getattr(campaign, "participant_quota", None) or 250,
+        "contributions_used": contributions,
+        "contributions_limit": getattr(campaign, "total_contribution_quota", None) or 1500,
+        "per_guest_photo_quota": getattr(campaign, "per_guest_photo_quota", None) or 20,
+    }
 
 
 def serialize_campaign(db: Session, campaign: GuestCampaign) -> dict:
@@ -2149,6 +2292,14 @@ def serialize_campaign(db: Session, campaign: GuestCampaign) -> dict:
         "is_open": campaign_is_open(campaign),
         "share_url": f"{APP_BASE_URL}/?campaign={campaign.token}",
         "created_at": campaign.created_at,
+        # Yearbook pilot fields (additive; legacy clients ignore them).
+        "campaign_type": getattr(campaign, "campaign_type", None) or "photo_collection",
+        "status": getattr(campaign, "status", None) or "published",
+        "details": json.loads(getattr(campaign, "details_json", None) or "{}"),
+        "consent_version": getattr(campaign, "consent_version", 0) or 0,
+        "theme_preset_id": getattr(campaign, "theme_preset_id", None),
+        "linked_album_id": getattr(campaign, "linked_album_id", None),
+        "quota": campaign_quota_usage(db, campaign),
     }
 
 
@@ -2249,13 +2400,29 @@ def get_campaign(token: str, db: Session = Depends(get_db)):
     if not campaign:
         raise HTTPException(status_code=404, detail="This upload link was not found")
     data = serialize_campaign(db, campaign)
-    data["gallery"] = campaign_gallery(db, campaign) if campaign_is_open(campaign) else []
+    is_graduation = data["campaign_type"] != "photo_collection"
+    if campaign_is_open(campaign):
+        data["gallery"] = (
+            contribution_gallery(db, campaign)
+            if is_graduation
+            else campaign_gallery(db, campaign)
+        )
+    else:
+        data["gallery"] = []
+    if is_graduation:
+        data["consent_text"] = getattr(campaign, "consent_text", "") or ""
+        data["contribution_schema"] = contribution_schema(campaign)
+        data["theme"] = public_theme(db, campaign)
     return data
 
 
 @app.post("/campaigns/{token}/guest")
 def register_guest(token: str, payload: GuestRegisterIn, db: Session = Depends(get_db)):
     campaign = require_open_campaign(db, token)
+    if (getattr(campaign, "campaign_type", None) or "photo_collection") != "photo_collection":
+        # Old clients hitting a structured campaign get an explicit signal
+        # instead of a photo-only flow (design doc section 14).
+        raise HTTPException(status_code=409, detail="Update required for this campaign")
     session = GuestUploadSession(
         campaign_id=campaign.id,
         guest_name=payload.name.strip() or "Guest",
@@ -2360,14 +2527,21 @@ def get_campaign_asset(token: str, asset_id: int, variant: str, db: Session = De
     asset = db.get(PhotoAsset, asset_id)
     if not asset or asset.circle_id != campaign.circle_id:
         raise HTTPException(status_code=404, detail="Asset not found")
-    # Only serve assets tied to an approved memory from THIS campaign; a
-    # campaign link must never expose the circle's private photos.
+    # Only serve assets tied to an approved memory or approved structured
+    # contribution from THIS campaign; a campaign link must never expose the
+    # circle's private photos.
     approved = db.scalar(
         select(MemoryItem.id).where(
             MemoryItem.asset_id == asset_id,
             MemoryItem.circle_id == campaign.circle_id,
             MemoryItem.campaign_id == campaign.id,
             MemoryItem.approval_status == "approved",
+        )
+    ) or db.scalar(
+        select(CampaignContribution.id).where(
+            CampaignContribution.campaign_id == campaign.id,
+            CampaignContribution.asset_id == asset_id,
+            CampaignContribution.moderation_status == "approved",
         )
     )
     if not approved:
@@ -2379,6 +2553,923 @@ def get_campaign_asset(token: str, asset_id: int, variant: str, db: Session = De
     if not str(path) or not path.exists():
         raise HTTPException(status_code=404, detail="Asset file missing")
     return FileResponse(path, media_type="image/jpeg")
+
+
+# ---- Graduation yearbook pilot: themes, contributors, contributions ----
+# (docs/GRADUATION_YEARBOOK_DESIGN.md — Phase 1: data foundation)
+
+GRADUATION_TEXT_TYPES = CONTRIBUTION_TYPES - {"photo_memory"}
+
+
+def effective_tokens(db: Session, campaign: GuestCampaign) -> dict:
+    preset_id = getattr(campaign, "theme_preset_id", None)
+    preset = db.get(ThemePreset, preset_id) if preset_id else None
+    raw = json.loads(preset.tokens_json or "{}") if preset else {}
+    tokens, _errors = validate_theme_tokens(raw)
+    return tokens
+
+
+def public_theme(db: Session, campaign: GuestCampaign) -> dict:
+    """Theme tokens for guests, with brand asset ids swapped for
+    campaign-scoped URLs (never raw internal ids alone)."""
+    tokens = effective_tokens(db, campaign)
+    assets = {}
+    for name, asset_id in tokens["assets"].items():
+        url_key = name.replace("_id", "_url")
+        assets[url_key] = (
+            f"/campaigns/{campaign.token}/brand-assets/{asset_id}" if asset_id else None
+        )
+    tokens["assets"] = assets
+    return tokens
+
+
+def contribution_schema(campaign: GuestCampaign) -> dict:
+    settings = campaign_settings(campaign)
+    return {
+        "enabled_types": [t for t in settings.get("enabled_types", []) if t in CONTRIBUTION_TYPES],
+        "profile_required_fields": settings.get("profile_required_fields", []),
+        "per_guest_text_quota": settings.get("per_guest_text_quota", 5),
+        "per_guest_photo_quota": getattr(campaign, "per_guest_photo_quota", None) or 20,
+    }
+
+
+def contribution_gallery(db: Session, campaign: GuestCampaign, limit: int = 60) -> list[dict]:
+    """Approved photo contributions for the guest gallery."""
+    rows = db.scalars(
+        select(CampaignContribution)
+        .where(
+            CampaignContribution.campaign_id == campaign.id,
+            CampaignContribution.contribution_type == "photo_memory",
+            CampaignContribution.moderation_status == "approved",
+            CampaignContribution.asset_id.is_not(None),
+        )
+        .order_by(CampaignContribution.created_at.desc())
+        .limit(limit)
+    ).all()
+    entries = []
+    for row in rows:
+        payload = json.loads(row.payload_json or "{}")
+        entries.append({
+            "contribution_id": row.id,
+            "caption": payload.get("caption", ""),
+            "display_name": row.display_name,
+            "thumbnail_url": f"/campaigns/{campaign.token}/assets/{row.asset_id}/thumbnail",
+            "display_url": f"/campaigns/{campaign.token}/assets/{row.asset_id}/display",
+        })
+    return entries
+
+
+def serialize_theme_preset(preset: ThemePreset) -> dict:
+    return {
+        "id": preset.id,
+        "circle_id": preset.circle_id,
+        "name": preset.name,
+        "preset_kind": preset.preset_kind,
+        "version": preset.version,
+        "tokens": json.loads(preset.tokens_json or "{}"),
+        "created_at": preset.created_at,
+    }
+
+
+def serialize_brand_asset(asset: BrandAsset) -> dict:
+    return {
+        "id": asset.id,
+        "kind": asset.kind,
+        "mime_type": asset.mime_type,
+        "width": asset.width,
+        "height": asset.height,
+        "file_size": asset.file_size,
+        "rights_confirmed": asset.rights_confirmed_at is not None,
+        "created_at": asset.created_at,
+    }
+
+
+def serialize_contribution(db: Session, contribution: CampaignContribution, for_owner: bool = False) -> dict:
+    votes = json.loads(contribution.votes_json or "[]")
+    data = {
+        "id": contribution.id,
+        "campaign_id": contribution.campaign_id,
+        "contribution_type": contribution.contribution_type,
+        "payload": json.loads(contribution.payload_json or "{}"),
+        "asset_id": contribution.asset_id,
+        "moderation_status": contribution.moderation_status,
+        "display_name": contribution.display_name,
+        "sort_hint": contribution.sort_hint,
+        "created_at": contribution.created_at,
+    }
+    if for_owner:
+        contributor = db.get(CampaignContributor, contribution.contributor_id)
+        data["contributor"] = {
+            "id": contributor.id,
+            "name": contributor.guest_name,
+            "email": contributor.guest_email,
+        } if contributor else None
+        data["votes"] = votes
+        if contribution.asset_id:
+            campaign = db.get(GuestCampaign, contribution.campaign_id)
+            data["thumbnail_url"] = f"/circles/{campaign.circle_id}/assets/{contribution.asset_id}/thumbnail"
+            data["display_url"] = f"/circles/{campaign.circle_id}/assets/{contribution.asset_id}/display"
+    return data
+
+
+def campaign_validation(db: Session, campaign: GuestCampaign) -> dict:
+    """Publish-preflight per the design doc: theme valid, logo present with
+    confirmed rights, consent text set."""
+    errors: list[str] = []
+    preset_id = getattr(campaign, "theme_preset_id", None)
+    preset = db.get(ThemePreset, preset_id) if preset_id else None
+    tokens_raw = json.loads(preset.tokens_json or "{}") if preset else {}
+    tokens, token_errors = validate_theme_tokens(tokens_raw)
+    errors.extend(token_errors)
+    logo_id = tokens["assets"].get("logo_id")
+    if not logo_id:
+        errors.append("theme.logo_required")
+    else:
+        logo = db.get(BrandAsset, logo_id)
+        if not logo or logo.circle_id != campaign.circle_id:
+            errors.append("asset.wrong_circle")
+        elif logo.rights_confirmed_at is None:
+            errors.append("rights.unconfirmed")
+    if not (getattr(campaign, "consent_text", "") or "").strip():
+        errors.append("consent.required")
+    return {"can_publish": not errors, "errors": errors}
+
+
+def require_owner_campaign(db: Session, circle_id: int, campaign_id: int, user: User) -> GuestCampaign:
+    require_member(db, circle_id, user, {"owner"})
+    campaign = db.get(GuestCampaign, campaign_id)
+    if not campaign or campaign.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return campaign
+
+
+def require_contributor(db: Session, campaign: GuestCampaign, contributor_token: str) -> CampaignContributor:
+    contributor = db.scalar(
+        select(CampaignContributor).where(
+            CampaignContributor.token == contributor_token,
+            CampaignContributor.campaign_id == campaign.id,
+        )
+    )
+    if not contributor or contributor.withdrawn_at is not None:
+        raise HTTPException(status_code=403, detail="Please confirm your details before contributing")
+    if contributor.verification_status != "verified":
+        raise HTTPException(status_code=403, detail="Please confirm your email code first")
+    return contributor
+
+
+def queue_contribution_notifications(db: Session, campaign: GuestCampaign, contribution: CampaignContribution):
+    votes = set(json.loads(contribution.votes_json or "[]"))
+    for user_id in approval_member_ids(db, campaign.circle_id):
+        if user_id in votes:
+            continue
+        queue_notification(
+            db,
+            user_id=user_id,
+            circle_id=campaign.circle_id,
+            type="contribution_approval_needed",
+            title="Yearbook submission waiting for review",
+            body=f'A guest submission to "{campaign.title}" needs your review.',
+            target_type="contribution",
+            target_id=contribution.id,
+        )
+
+
+# Owner endpoints: theme presets and brand assets.
+
+@app.get("/circles/{circle_id}/theme-presets")
+def list_theme_presets(circle_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, {"owner"})
+    presets = db.scalars(
+        select(ThemePreset).where(ThemePreset.circle_id == circle_id, ThemePreset.archived_at.is_(None))
+    ).all()
+    return [serialize_theme_preset(preset) for preset in presets]
+
+
+@app.patch("/circles/{circle_id}/theme-presets/{preset_id}")
+def patch_theme_preset(circle_id: int, preset_id: int, payload: ThemePresetPatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, {"owner"})
+    preset = db.get(ThemePreset, preset_id)
+    if not preset or preset.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Theme not found")
+    if payload.name is not None:
+        preset.name = payload.name.strip()[:160] or preset.name
+    if payload.tokens is not None:
+        merged_raw = json.loads(preset.tokens_json or "{}")
+        merged_raw.update(payload.tokens)
+        tokens, errors = validate_theme_tokens(merged_raw)
+        # Asset references must belong to this circle.
+        for name, asset_id in tokens["assets"].items():
+            if asset_id is not None:
+                asset = db.get(BrandAsset, asset_id)
+                if not asset or asset.circle_id != circle_id:
+                    errors.append(f"asset.wrong_circle.{name}")
+        blocking = [e for e in errors if not e.startswith("theme.low_contrast") or True]
+        if blocking:
+            raise HTTPException(status_code=400, detail={"errors": errors})
+        preset.tokens_json = json.dumps(tokens)
+        preset.version += 1
+    log_activity(db, circle_id, user.id, "theme.updated", "theme", preset_id)
+    db.commit()
+    db.refresh(preset)
+    return serialize_theme_preset(preset)
+
+
+@app.post("/circles/{circle_id}/theme-presets/{preset_id}/assets")
+def upload_brand_asset(
+    circle_id: int,
+    preset_id: int,
+    kind: str = Form(...),
+    rights_confirmed: bool = Form(False),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    require_member(db, circle_id, user, {"owner"})
+    preset = db.get(ThemePreset, preset_id)
+    if not preset or preset.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Theme not found")
+    if kind not in BRAND_ASSET_KINDS:
+        raise HTTPException(status_code=400, detail="Unknown brand asset kind")
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail="Only JPEG, PNG, and WebP images are supported")
+    raw = file.file.read()
+    max_bytes, min_edge, max_edge = BRAND_ASSET_RULES[kind]
+    if len(raw) > max_bytes:
+        raise HTTPException(status_code=400, detail=f"That image is too large (max {max_bytes // (1024 * 1024)} MB)")
+    try:
+        with Image.open(BytesIO(raw)) as image:
+            width, height = image.size
+            has_alpha = image.mode in ("RGBA", "LA", "P")
+            # Re-encode to strip metadata; keep transparency for logos.
+            image.thumbnail((max_edge, max_edge))
+            out = BytesIO()
+            if has_alpha and kind in ("logo", "secondary_mark"):
+                image.convert("RGBA").save(out, format="PNG")
+                mime = "image/png"
+            else:
+                image.convert("RGB").save(out, format="JPEG", quality=88)
+                mime = "image/jpeg"
+    except Exception:
+        raise HTTPException(status_code=400, detail="Uploaded file is not a readable image")
+    if max(width, height) < min_edge:
+        raise HTTPException(status_code=400, detail=f"That image is too small (at least {min_edge}px on the long edge)")
+    display_bytes = out.getvalue()
+    display_path = ""
+    display_blob = None
+    if ASSET_STORAGE == "db":
+        display_blob = display_bytes
+    else:
+        brand_dir = STORAGE_ROOT / "brand" / str(circle_id)
+        brand_dir.mkdir(parents=True, exist_ok=True)
+        suffix = "png" if mime == "image/png" else "jpg"
+        target = brand_dir / f"{hashlib.sha256(raw).hexdigest()[:20]}-{kind}.{suffix}"
+        target.write_bytes(display_bytes)
+        display_path = str(target)
+    asset = BrandAsset(
+        circle_id=circle_id,
+        theme_preset_id=preset_id,
+        kind=kind,
+        mime_type=mime,
+        width=width,
+        height=height,
+        file_size=len(display_bytes),
+        content_hash=hashlib.sha256(raw).hexdigest(),
+        display_path=display_path,
+        display_blob=display_blob,
+        created_by=user.id,
+        rights_confirmed_at=datetime.utcnow() if rights_confirmed else None,
+    )
+    db.add(asset)
+    db.flush()
+    # Wire the asset into the preset tokens so owners don't need a second call.
+    tokens, _ = validate_theme_tokens(json.loads(preset.tokens_json or "{}"))
+    token_key = {"logo": "logo_id", "secondary_mark": "secondary_mark_id",
+                 "background": "background_asset_id", "cover": "cover_asset_id"}[kind]
+    tokens["assets"][token_key] = asset.id
+    preset.tokens_json = json.dumps(tokens)
+    preset.version += 1
+    log_activity(db, circle_id, user.id, "theme.asset_uploaded", "brand_asset", asset.id, {"kind": kind})
+    db.commit()
+    db.refresh(asset)
+    return serialize_brand_asset(asset)
+
+
+# Owner endpoints: campaign studio.
+
+@app.post("/circles/{circle_id}/campaigns/from-preset")
+def create_campaign_from_preset(circle_id: int, payload: CampaignFromPresetIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, {"owner"})
+    if payload.preset != "university_graduation":
+        raise HTTPException(status_code=400, detail="Unknown campaign preset")
+    preset = ThemePreset(
+        circle_id=circle_id,
+        name=payload.title.strip()[:160] or "University Graduation",
+        preset_kind="university_graduation",
+        tokens_json=json.dumps(GRADUATION_TOKENS_DEFAULT),
+        created_by=user.id,
+    )
+    db.add(preset)
+    db.flush()
+    campaign = GuestCampaign(
+        circle_id=circle_id,
+        token=secrets.token_urlsafe(24),
+        title=payload.title.strip() or "Graduation",
+        note=payload.note,
+        created_by=user.id,
+        expires_at=payload.expires_at,
+        require_email_verify=payload.require_email_verify,
+        campaign_type="university_graduation",
+        theme_preset_id=preset.id,
+        details_json=json.dumps({k: str(v)[:300] for k, v in (payload.details or {}).items()}),
+        contribution_settings_json=json.dumps(DEFAULT_CONTRIBUTION_SETTINGS),
+        consent_text=DEFAULT_CONSENT_TEXT,
+        status="draft",
+    )
+    db.add(campaign)
+    db.flush()
+    log_activity(db, circle_id, user.id, "campaign.created", "campaign", campaign.id, {"type": "university_graduation"})
+    db.commit()
+    db.refresh(campaign)
+    data = serialize_campaign(db, campaign)
+    data["validation"] = campaign_validation(db, campaign)
+    return data
+
+
+@app.get("/circles/{circle_id}/campaigns/{campaign_id}/studio")
+def campaign_studio(circle_id: int, campaign_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    campaign = require_owner_campaign(db, circle_id, campaign_id, user)
+    data = serialize_campaign(db, campaign)
+    data["consent_text"] = getattr(campaign, "consent_text", "") or ""
+    data["contribution_settings"] = campaign_settings(campaign)
+    preset_id = getattr(campaign, "theme_preset_id", None)
+    preset = db.get(ThemePreset, preset_id) if preset_id else None
+    data["theme"] = serialize_theme_preset(preset) if preset else None
+    if preset:
+        assets = db.scalars(select(BrandAsset).where(BrandAsset.theme_preset_id == preset.id)).all()
+        data["brand_assets"] = [serialize_brand_asset(a) for a in assets]
+    data["validation"] = campaign_validation(db, campaign)
+    return data
+
+
+@app.patch("/circles/{circle_id}/campaigns/{campaign_id}/details")
+def patch_campaign_details(circle_id: int, campaign_id: int, payload: CampaignDetailsPatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    campaign = require_owner_campaign(db, circle_id, campaign_id, user)
+    if payload.title is not None:
+        campaign.title = payload.title.strip()[:220] or campaign.title
+    if payload.note is not None:
+        campaign.note = payload.note
+    if payload.expires_at is not None:
+        campaign.expires_at = payload.expires_at
+    if payload.details is not None:
+        campaign.details_json = json.dumps({k: str(v)[:300] for k, v in payload.details.items()})
+    if payload.consent_text is not None:
+        if (getattr(campaign, "status", "draft") or "draft") == "published":
+            raise HTTPException(status_code=400, detail="Consent text is frozen once the campaign is published")
+        campaign.consent_text = payload.consent_text.strip()
+    log_activity(db, circle_id, user.id, "campaign.updated", "campaign", campaign_id)
+    db.commit()
+    db.refresh(campaign)
+    data = serialize_campaign(db, campaign)
+    data["validation"] = campaign_validation(db, campaign)
+    return data
+
+
+@app.patch("/circles/{circle_id}/campaigns/{campaign_id}/contribution-settings")
+def patch_contribution_settings(circle_id: int, campaign_id: int, payload: ContributionSettingsPatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    campaign = require_owner_campaign(db, circle_id, campaign_id, user)
+    settings = campaign_settings(campaign)
+    changes = payload.model_dump(exclude_unset=True)
+    if "enabled_types" in changes:
+        unknown = set(changes["enabled_types"]) - CONTRIBUTION_TYPES
+        if unknown:
+            raise HTTPException(status_code=400, detail=f"Unknown contribution types: {sorted(unknown)}")
+        settings["enabled_types"] = changes["enabled_types"]
+    if "per_guest_text_quota" in changes and changes["per_guest_text_quota"]:
+        settings["per_guest_text_quota"] = max(1, min(50, changes["per_guest_text_quota"]))
+    if "profile_required_fields" in changes and changes["profile_required_fields"] is not None:
+        settings["profile_required_fields"] = [str(f) for f in changes["profile_required_fields"]]
+    for quota_field in ("per_guest_photo_quota", "participant_quota", "total_contribution_quota"):
+        if changes.get(quota_field):
+            setattr(campaign, quota_field, max(1, changes[quota_field]))
+    campaign.contribution_settings_json = json.dumps(settings)
+    log_activity(db, circle_id, user.id, "campaign.settings_updated", "campaign", campaign_id)
+    db.commit()
+    db.refresh(campaign)
+    data = serialize_campaign(db, campaign)
+    data["contribution_settings"] = campaign_settings(campaign)
+    return data
+
+
+@app.post("/circles/{circle_id}/campaigns/{campaign_id}/publish")
+def publish_campaign(circle_id: int, campaign_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    campaign = require_owner_campaign(db, circle_id, campaign_id, user)
+    validation = campaign_validation(db, campaign)
+    if not validation["can_publish"]:
+        raise HTTPException(status_code=400, detail={"errors": validation["errors"]})
+    campaign.status = "published"
+    campaign.published_at = datetime.utcnow()
+    if not (getattr(campaign, "consent_version", 0) or 0):
+        campaign.consent_version = 1
+    log_activity(db, circle_id, user.id, "campaign.published", "campaign", campaign_id)
+    db.commit()
+    db.refresh(campaign)
+    return serialize_campaign(db, campaign)
+
+
+# Owner endpoints: yearbook generation from approved contributions.
+
+YEARBOOK_PROFILES_PER_PAGE = 2
+YEARBOOK_DEDICATIONS_PER_PAGE = 3
+YEARBOOK_SIGNATURES_PER_PAGE = 12
+
+
+def contribution_photo_entry(db: Session, contribution: CampaignContribution) -> Optional[dict]:
+    """A photo entry (same shape as memory_entry) for an approved photo
+    contribution, so mosaic pages reuse the orientation-aware composer."""
+    if not contribution.asset_id:
+        return None
+    asset = db.get(PhotoAsset, contribution.asset_id)
+    if not asset:
+        return None
+    width = asset.width or 0
+    height = asset.height or 0
+    ratio = max(0.5, min(2.2, width / height)) if width > 0 and height > 0 else 1.0
+    orientation = "landscape" if ratio >= 1.15 else ("portrait" if ratio <= 0.87 else "square")
+    payload = json.loads(contribution.payload_json or "{}")
+    return {
+        "contribution_id": contribution.id,
+        "asset_id": contribution.asset_id,
+        "caption": payload.get("caption", ""),
+        "date_label": "",
+        "story_preview": "",
+        "credit": contribution.display_name,
+        "aspect_ratio": round(ratio, 4),
+        "orientation": orientation,
+        "display_url": f"/circles/{asset.circle_id}/assets/{asset.id}/display",
+        "thumbnail_url": f"/circles/{asset.circle_id}/assets/{asset.id}/thumbnail",
+    }
+
+
+def build_yearbook_pages(db: Session, campaign: GuestCampaign, album: Album) -> list[AlbumPage]:
+    """Deterministic themed yearbook: cover, official messages, graduate
+    profiles, photo mosaic, dedications, typed signatures, acknowledgements,
+    back cover. Sections with no approved content are skipped. Pages are
+    schema_version 2 and carry the album's theme snapshot inline so the
+    renderer is stateless."""
+    tokens = json.loads(album.theme_snapshot_json or "{}") or effective_tokens(db, campaign)
+    details = json.loads(getattr(campaign, "details_json", None) or "{}")
+    approved = db.scalars(
+        select(CampaignContribution)
+        .where(
+            CampaignContribution.campaign_id == campaign.id,
+            CampaignContribution.moderation_status == "approved",
+            CampaignContribution.visibility == "yearbook",
+        )
+        .order_by(CampaignContribution.sort_hint.asc(), CampaignContribution.created_at.asc())
+    ).all()
+    by_type: dict[str, list[CampaignContribution]] = {}
+    for item in approved:
+        by_type.setdefault(item.contribution_type, []).append(item)
+
+    logo_id = (tokens.get("assets") or {}).get("logo_id")
+    logo_url = f"/circles/{campaign.circle_id}/brand-assets/{logo_id}/display" if logo_id else None
+
+    def payloads(kind: str) -> list[dict]:
+        rows = []
+        for item in by_type.get(kind, []):
+            payload = json.loads(item.payload_json or "{}")
+            payload["contribution_id"] = item.id
+            payload.setdefault("display_name", item.display_name)
+            rows.append(payload)
+        return rows
+
+    pages_layouts: list[dict] = []
+
+    def page(template: str, body: dict, section: str) -> None:
+        pages_layouts.append({
+            "schema_version": 2,
+            "template": template,
+            "section": section,
+            "theme": tokens,
+            "header": {"section_title": details.get("cohort", "") or campaign.title},
+            "footer": {
+                "text": (tokens.get("footer") or {}).get("text", ""),
+                "show_page_number": (tokens.get("footer") or {}).get("show_page_number", True),
+            },
+            **body,
+        })
+
+    page("graduation_cover", {
+        "title": campaign.title,
+        "university": details.get("university", ""),
+        "faculty": details.get("faculty", ""),
+        "cohort": details.get("cohort", ""),
+        "graduation_date": details.get("graduation_date", ""),
+        "venue": details.get("venue", ""),
+        "logo_url": logo_url,
+    }, "cover")
+
+    for message in payloads("official_message"):
+        page("official_message", {"message": message}, "official_messages")
+
+    profiles = payloads("graduate_profile")
+    profile_assets = {
+        item.id: contribution_photo_entry(db, item)
+        for item in by_type.get("graduate_profile", [])
+    }
+    profiles.sort(key=lambda item: (item.get("full_name") or "").lower())
+    for start in range(0, len(profiles), YEARBOOK_PROFILES_PER_PAGE):
+        group = profiles[start:start + YEARBOOK_PROFILES_PER_PAGE]
+        for profile in group:
+            entry = profile_assets.get(profile["contribution_id"])
+            if entry:
+                profile["photo"] = entry
+        template = "graduate_profile_pair" if len(group) == 2 else "graduate_profile_single"
+        page(template, {"profiles": group}, "graduates")
+
+    photo_entries = [
+        entry for entry in (
+            contribution_photo_entry(db, item) for item in by_type.get("photo_memory", [])
+        ) if entry
+    ]
+    for content in compose_photo_entry_pages(photo_entries):
+        page("photo_mosaic", {"rows": content["rows"], "memories": content["memories"]}, "memories")
+
+    dedications = payloads("dedication")
+    for start in range(0, len(dedications), YEARBOOK_DEDICATIONS_PER_PAGE):
+        page("dedication_grid",
+             {"dedications": dedications[start:start + YEARBOOK_DEDICATIONS_PER_PAGE]},
+             "dedications")
+
+    signatures = payloads("typed_signature")
+    for start in range(0, len(signatures), YEARBOOK_SIGNATURES_PER_PAGE):
+        page("typed_signature_grid",
+             {"signatures": signatures[start:start + YEARBOOK_SIGNATURES_PER_PAGE]},
+             "signatures")
+
+    acknowledgements = payloads("acknowledgement")
+    if acknowledgements:
+        page("acknowledgements", {"items": acknowledgements}, "acknowledgements")
+
+    page("graduation_back_cover", {
+        "title": campaign.title,
+        "cohort": details.get("cohort", ""),
+        "logo_url": logo_url,
+    }, "back_cover")
+
+    records: list[AlbumPage] = []
+    for number, layout in enumerate(pages_layouts, start=1):
+        layout["page_number"] = number
+        record = AlbumPage(
+            album_id=album.id,
+            page_number=number,
+            layout_json=json.dumps(layout),
+            approval_status="approved",
+        )
+        db.add(record)
+        records.append(record)
+    return records
+
+
+@app.post("/circles/{circle_id}/campaigns/{campaign_id}/yearbook")
+def generate_yearbook(circle_id: int, campaign_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Creates (or regenerates) the campaign's linked yearbook album from the
+    approved contributions, snapshotting the theme so later preset edits do
+    not silently change it."""
+    require_member(db, circle_id, user, APPROVE_ROLES)
+    campaign = db.get(GuestCampaign, campaign_id)
+    if not campaign or campaign.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    tokens = effective_tokens(db, campaign)
+    album_id = getattr(campaign, "linked_album_id", None)
+    album = db.get(Album, album_id) if album_id else None
+    if album is None:
+        album = Album(
+            circle_id=circle_id,
+            title=campaign.title,
+            description=json.loads(getattr(campaign, "details_json", None) or "{}").get("university", ""),
+            template_key="graduation",
+            album_kind="graduation_yearbook",
+            campaign_id=campaign.id,
+            created_by=user.id,
+        )
+        db.add(album)
+        db.flush()
+        campaign.linked_album_id = album.id
+    else:
+        album.revision = (getattr(album, "revision", 1) or 1) + 1
+    preset = db.get(ThemePreset, getattr(campaign, "theme_preset_id", None)) if getattr(campaign, "theme_preset_id", None) else None
+    album.theme_snapshot_json = json.dumps(tokens)
+    album.theme_snapshot_version = preset.version if preset else 1
+    db.execute(delete(AlbumPage).where(AlbumPage.album_id == album.id))
+    pages = build_yearbook_pages(db, campaign, album)
+    log_activity(db, circle_id, user.id, "yearbook.generated", "album", album.id, {"pages": len(pages)})
+    db.commit()
+    db.refresh(album)
+    result = serialize_album(album, pages, max_photo_count=None)
+    result["page_count"] = len(pages)
+    return result
+
+
+# Owner endpoints: contribution moderation (consensus, like photo approval).
+
+@app.get("/circles/{circle_id}/campaigns/{campaign_id}/contributions")
+def list_contributions(circle_id: int, campaign_id: int, status: Optional[str] = None, contribution_type: Optional[str] = None, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, APPROVE_ROLES)
+    campaign = db.get(GuestCampaign, campaign_id)
+    if not campaign or campaign.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    query = select(CampaignContribution).where(CampaignContribution.campaign_id == campaign_id)
+    if status:
+        query = query.where(CampaignContribution.moderation_status == status)
+    if contribution_type:
+        query = query.where(CampaignContribution.contribution_type == contribution_type)
+    rows = db.scalars(query.order_by(CampaignContribution.created_at.asc())).all()
+    return [serialize_contribution(db, row, for_owner=True) for row in rows]
+
+
+def _moderate_contribution(db: Session, circle_id: int, campaign_id: int, contribution_id: int, user: User, action: str):
+    member = require_member(db, circle_id, user)
+    if member.role not in APPROVE_ROLES:
+        raise HTTPException(status_code=403, detail="Only reviewers can moderate submissions")
+    campaign = db.get(GuestCampaign, campaign_id)
+    contribution = db.get(CampaignContribution, contribution_id)
+    if not campaign or campaign.circle_id != circle_id or not contribution or contribution.campaign_id != campaign_id:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    if action == "approve":
+        votes = set(json.loads(contribution.votes_json or "[]"))
+        votes.add(user.id)
+        contribution.votes_json = json.dumps(sorted(votes))
+        needed = set(approval_member_ids(db, circle_id))
+        if needed and needed.issubset(votes):
+            contribution.moderation_status = "approved"
+        else:
+            contribution.moderation_status = "pending"
+            queue_contribution_notifications(db, campaign, contribution)
+    elif action == "reject":
+        contribution.moderation_status = "rejected"
+    else:
+        contribution.moderation_status = "changes_requested"
+    log_activity(db, circle_id, user.id, f"contribution.{action}", "contribution", contribution_id)
+    db.commit()
+    db.refresh(contribution)
+    return serialize_contribution(db, contribution, for_owner=True)
+
+
+@app.post("/circles/{circle_id}/campaigns/{campaign_id}/contributions/{contribution_id}/approve")
+def approve_contribution(circle_id: int, campaign_id: int, contribution_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    return _moderate_contribution(db, circle_id, campaign_id, contribution_id, user, "approve")
+
+
+@app.post("/circles/{circle_id}/campaigns/{campaign_id}/contributions/{contribution_id}/reject")
+def reject_contribution(circle_id: int, campaign_id: int, contribution_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    return _moderate_contribution(db, circle_id, campaign_id, contribution_id, user, "reject")
+
+
+@app.post("/circles/{circle_id}/campaigns/{campaign_id}/contributions/{contribution_id}/request-changes")
+def request_contribution_changes(circle_id: int, campaign_id: int, contribution_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    return _moderate_contribution(db, circle_id, campaign_id, contribution_id, user, "request-changes")
+
+
+# Guest endpoints: contributors and structured contributions.
+
+@app.post("/campaigns/{token}/contributors")
+def register_contributor(token: str, payload: ContributorRegisterIn, db: Session = Depends(get_db)):
+    campaign = require_open_campaign(db, token)
+    if (getattr(campaign, "consent_text", "") or "").strip() and not payload.accept_consent:
+        raise HTTPException(status_code=400, detail="Please accept the consent statement to continue")
+    email = payload.email.lower()
+    contributor = db.scalar(
+        select(CampaignContributor).where(
+            CampaignContributor.campaign_id == campaign.id,
+            CampaignContributor.guest_email == email,
+        )
+    )
+    if contributor is None:
+        used = db.scalar(
+            select(func.count(CampaignContributor.id)).where(CampaignContributor.campaign_id == campaign.id)
+        ) or 0
+        if used >= (getattr(campaign, "participant_quota", None) or 250):
+            raise HTTPException(status_code=429, detail="This event has reached its participant limit")
+        contributor = CampaignContributor(
+            campaign_id=campaign.id,
+            guest_name=payload.name.strip()[:160] or "Guest",
+            guest_email=email,
+            token=secrets.token_urlsafe(24),
+            consent_version=getattr(campaign, "consent_version", 0) or 0,
+            consented_at=datetime.utcnow() if payload.accept_consent else None,
+        )
+        db.add(contributor)
+    else:
+        contributor.guest_name = payload.name.strip()[:160] or contributor.guest_name
+        contributor.withdrawn_at = None
+    needs_verification = campaign.require_email_verify and contributor.verification_status != "verified"
+    if needs_verification:
+        contributor.verify_code = f"{secrets.randbelow(1000000):06d}"
+        contributor.verify_expires_at = datetime.utcnow() + timedelta(minutes=15)
+        db.commit()
+        db.refresh(contributor)
+        sent = send_guest_verify_code(contributor.guest_email, campaign.title, contributor.verify_code)
+        if not sent and not email_enabled():
+            contributor.verification_status = "verified"
+            contributor.verified_at = datetime.utcnow()
+            db.commit()
+            return {"contributor_token": contributor.token, "needs_verification": False}
+        return {"needs_verification": True}
+    contributor.verification_status = "verified"
+    if contributor.verified_at is None:
+        contributor.verified_at = datetime.utcnow()
+    db.commit()
+    db.refresh(contributor)
+    return {"contributor_token": contributor.token, "needs_verification": False}
+
+
+@app.post("/campaigns/{token}/contributors/verify")
+def verify_contributor(token: str, payload: GuestVerifyIn, db: Session = Depends(get_db)):
+    campaign = require_open_campaign(db, token)
+    contributor = db.scalar(
+        select(CampaignContributor).where(
+            CampaignContributor.campaign_id == campaign.id,
+            CampaignContributor.guest_email == payload.email.lower(),
+        )
+    )
+    if not contributor or contributor.verify_code != payload.code.strip():
+        raise HTTPException(status_code=400, detail="That code is not correct")
+    if contributor.verify_expires_at and contributor.verify_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="That code has expired")
+    contributor.verification_status = "verified"
+    contributor.verified_at = datetime.utcnow()
+    db.commit()
+    return {"contributor_token": contributor.token, "needs_verification": False}
+
+
+@app.post("/campaigns/{token}/contribution-assets")
+def upload_contribution_asset(
+    token: str,
+    contributor_token: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    campaign = require_open_campaign(db, token)
+    require_contributor(db, campaign, contributor_token)
+    asset = store_asset_bytes(
+        db,
+        campaign.circle_id,
+        file.file.read(),
+        file.content_type,
+        file.filename,
+        campaign.created_by,
+        source_type="guest_upload",
+    )
+    db.commit()
+    db.refresh(asset)
+    return {"asset_id": asset.id}
+
+
+@app.post("/campaigns/{token}/contributions")
+def create_contribution(token: str, payload: ContributionIn, db: Session = Depends(get_db)):
+    campaign = require_open_campaign(db, token)
+    contributor = require_contributor(db, campaign, payload.contributor_token)
+    settings = campaign_settings(campaign)
+    if payload.contribution_type not in settings.get("enabled_types", []):
+        raise HTTPException(status_code=400, detail="This kind of submission is not enabled for this event")
+    clean, errors = validate_contribution_payload(payload.contribution_type, payload.payload or {}, settings)
+    if payload.contribution_type == "photo_memory" and not payload.asset_id:
+        errors.append("contribution.missing.photo")
+    if errors:
+        raise HTTPException(status_code=400, detail={"errors": errors})
+    if payload.asset_id:
+        asset = db.get(PhotoAsset, payload.asset_id)
+        if not asset or asset.circle_id != campaign.circle_id:
+            raise HTTPException(status_code=400, detail={"errors": ["asset.wrong_circle"]})
+    quota = campaign_quota_usage(db, campaign)
+    if quota["contributions_used"] >= quota["contributions_limit"]:
+        raise HTTPException(status_code=429, detail="This event has reached its submission limit")
+    mine = db.scalars(
+        select(CampaignContribution).where(
+            CampaignContribution.campaign_id == campaign.id,
+            CampaignContribution.contributor_id == contributor.id,
+            CampaignContribution.moderation_status.notin_(["rejected", "withdrawn"]),
+        )
+    ).all()
+    if payload.contribution_type == "photo_memory":
+        photos = sum(1 for m in mine if m.contribution_type == "photo_memory")
+        if photos >= quota["per_guest_photo_quota"]:
+            raise HTTPException(status_code=429, detail="You've reached the photo limit for this event")
+    else:
+        texts = sum(1 for m in mine if m.contribution_type != "photo_memory")
+        if texts >= settings.get("per_guest_text_quota", 5):
+            raise HTTPException(status_code=429, detail="You've reached the submission limit for this event")
+    if payload.contribution_type == "graduate_profile" and any(
+        m.contribution_type == "graduate_profile" for m in mine
+    ):
+        raise HTTPException(status_code=409, detail="You already have a graduate profile — edit it instead")
+    contribution = CampaignContribution(
+        campaign_id=campaign.id,
+        contributor_id=contributor.id,
+        contribution_type=payload.contribution_type,
+        payload_json=json.dumps(clean),
+        asset_id=payload.asset_id,
+        moderation_status="pending",
+        display_name=contributor.guest_name,
+        consent_version=contributor.consent_version,
+        consented_at=contributor.consented_at,
+    )
+    db.add(contribution)
+    db.flush()
+    queue_contribution_notifications(db, campaign, contribution)
+    log_activity(db, campaign.circle_id, campaign.created_by, "contribution.submitted", "contribution", contribution.id, {"type": payload.contribution_type})
+    db.commit()
+    db.refresh(contribution)
+    return serialize_contribution(db, contribution)
+
+
+@app.get("/campaigns/{token}/contributions")
+def my_contributions(token: str, contributor_token: str, db: Session = Depends(get_db)):
+    campaign = require_open_campaign(db, token)
+    contributor = require_contributor(db, campaign, contributor_token)
+    rows = db.scalars(
+        select(CampaignContribution)
+        .where(
+            CampaignContribution.campaign_id == campaign.id,
+            CampaignContribution.contributor_id == contributor.id,
+            CampaignContribution.moderation_status != "withdrawn",
+        )
+        .order_by(CampaignContribution.created_at.asc())
+    ).all()
+    return [serialize_contribution(db, row) for row in rows]
+
+
+@app.patch("/campaigns/{token}/contributions/{contribution_id}")
+def patch_contribution(token: str, contribution_id: int, payload: ContributionPatch, db: Session = Depends(get_db)):
+    campaign = require_open_campaign(db, token)
+    contributor = require_contributor(db, campaign, payload.contributor_token)
+    contribution = db.get(CampaignContribution, contribution_id)
+    if not contribution or contribution.contributor_id != contributor.id:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    if contribution.moderation_status not in ("pending", "changes_requested"):
+        raise HTTPException(status_code=400, detail="This submission can no longer be edited")
+    if payload.payload is not None:
+        settings = campaign_settings(campaign)
+        clean, errors = validate_contribution_payload(contribution.contribution_type, payload.payload, settings)
+        if errors:
+            raise HTTPException(status_code=400, detail={"errors": errors})
+        contribution.payload_json = json.dumps(clean)
+    if payload.asset_id is not None:
+        asset = db.get(PhotoAsset, payload.asset_id)
+        if not asset or asset.circle_id != campaign.circle_id:
+            raise HTTPException(status_code=400, detail={"errors": ["asset.wrong_circle"]})
+        contribution.asset_id = payload.asset_id
+    contribution.moderation_status = "pending"
+    contribution.votes_json = "[]"
+    db.commit()
+    db.refresh(contribution)
+    return serialize_contribution(db, contribution)
+
+
+@app.post("/campaigns/{token}/contributions/{contribution_id}/withdraw")
+def withdraw_contribution(token: str, contribution_id: int, payload: ContributionPatch, db: Session = Depends(get_db)):
+    campaign = require_open_campaign(db, token)
+    contributor = require_contributor(db, campaign, payload.contributor_token)
+    contribution = db.get(CampaignContribution, contribution_id)
+    if not contribution or contribution.contributor_id != contributor.id:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    contribution.moderation_status = "withdrawn"
+    db.commit()
+    return {"status": "withdrawn"}
+
+
+@app.get("/circles/{circle_id}/brand-assets/{asset_id}/display")
+def get_brand_asset_display(circle_id: int, asset_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Serves a brand asset (logo/cover) to circle members, e.g. inside the
+    generated yearbook pages."""
+    require_member(db, circle_id, user)
+    asset = db.get(BrandAsset, asset_id)
+    if not asset or asset.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Not found")
+    if asset.display_blob is not None:
+        return Response(content=asset.display_blob, media_type=asset.mime_type)
+    path = Path(asset.display_path)
+    if not str(path) or not path.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(path, media_type=asset.mime_type)
+
+
+@app.get("/campaigns/{token}/brand-assets/{asset_id}")
+def get_campaign_brand_asset(token: str, asset_id: int, db: Session = Depends(get_db)):
+    campaign = db.scalar(select(GuestCampaign).where(GuestCampaign.token == token))
+    if not campaign or not campaign_is_open(campaign):
+        raise HTTPException(status_code=404, detail="Not found")
+    asset = db.get(BrandAsset, asset_id)
+    preset_id = getattr(campaign, "theme_preset_id", None)
+    if not asset or asset.circle_id != campaign.circle_id or not preset_id or asset.theme_preset_id != preset_id:
+        raise HTTPException(status_code=404, detail="Not found")
+    if asset.display_blob is not None:
+        return Response(content=asset.display_blob, media_type=asset.mime_type)
+    path = Path(asset.display_path)
+    if not str(path) or not path.exists():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(path, media_type=asset.mime_type)
 
 
 @app.patch("/circles/{circle_id}/albums/{album_id}")
@@ -2515,6 +3606,12 @@ def compose_content_pages(memories: list[MemoryItem]) -> list[dict]:
     portraits pair side by side, and the two can mix on one page (a landscape
     over a portrait pair)."""
     entries = [memory_entry(memory) for memory in memories]
+    return compose_photo_entry_pages(entries)
+
+
+def compose_photo_entry_pages(entries: list[dict]) -> list[dict]:
+    """Orientation-aware page grouping over prebuilt photo entries (used by
+    both classic albums and yearbook photo-mosaic sections)."""
     pages: list[dict] = []
     index = 0
     total = len(entries)
