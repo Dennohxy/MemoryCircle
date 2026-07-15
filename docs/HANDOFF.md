@@ -3,6 +3,46 @@
 Use this log for short handoffs between human maintainers, Codex, and Claude.
 Newest entry goes at the top.
 
+## 2026-07-16 - Claude (yearbook pilot backend complete)
+
+Branch: `perf/image-loading`, deployed to `main` @ `2550c5d`.
+
+Owner: Claude (completed the in-progress backend started per
+`docs/GRADUATION_YEARBOOK_DESIGN.md`; models/endpoints were partially built,
+I added the yearbook generation, member brand-asset route, composer refactor
+(`compose_photo_entry_pages`), and the end-to-end pilot test).
+
+Backend is now pilot-complete: theme presets + brand assets, campaign studio
+APIs, contributor identity + consent, six contribution types with consensus
+moderation, per-campaign quotas, campaign-scoped galleries, and deterministic
+themed yearbook generation (`POST /circles/{id}/campaigns/{id}/yearbook`,
+schema_version-2 pages with immutable theme snapshots, revision bump on
+regenerate). 37 backend tests pass.
+
+Remaining for the pilot (Flutter, unclaimed):
+
+1. Themed renderer: `album_page_view.dart` needs a schema_version-2 branch
+   for templates graduation_cover, official_message, graduate_profile_single/
+   _pair, photo_mosaic (reuse mosaic rows), dedication_grid,
+   typed_signature_grid, acknowledgements, graduation_back_cover. Theme tokens
+   ride inside each page's layout_json ("theme").
+2. Guest structured forms in `guest_campaign_screen.dart`: consent step, type
+   picker, profile/dedication/signature forms against
+   `GET /campaigns/{token}` -> `contribution_schema`, contributor endpoints
+   (`/contributors`, `/contributors/verify`, `/contribution-assets`,
+   `/contributions` CRUD + withdraw).
+3. Owner studio in `campaigns_screen.dart`: create-from-preset, details,
+   branding upload (kind + rights_confirmed multipart), publish preflight
+   (`validation.errors`), moderation list + approve/reject/request-changes,
+   and a "Generate yearbook" action.
+
+Checks run: backend pytest (37), py_compile, flutter analyze + test at
+`2550c5d` in a clean worktree.
+
+Known risks: startup `ALTER TABLE` migration (design doc prefers Alembic —
+deferred); share packages don't yet rewrite v2 page asset URLs for public
+viewing (public yearbook shares are Phase 4).
+
 ## 2026-07-08 - Claude (circle merge + inactivity)
 
 Branch: `feature/circle-merge-and-inactivity` (cut from `main` @ `521f4d6`)
