@@ -111,6 +111,11 @@ class MemoryItem(Base):
     location_text: Mapped[str] = mapped_column(String(200), default="")
     people_json: Mapped[str] = mapped_column(Text, default="[]")
     submitted_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    # Guest (no-account) uploads keep submitted_by = the campaign owner but
+    # record who really contributed here.
+    guest_name: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
+    guest_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    campaign_id: Mapped[Optional[int]] = mapped_column(ForeignKey("guest_campaigns.id"), nullable=True)
     approval_status: Mapped[str] = mapped_column(String(60), default="draft", index=True)
     approval_votes_json: Mapped[str] = mapped_column(Text, default="[]")
     approved_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
@@ -260,4 +265,53 @@ class ActivityLog(Base):
     target_type: Mapped[str] = mapped_column(String(100))
     target_id: Mapped[int] = mapped_column(Integer)
     details_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class PasswordResetToken(Base):
+    """A one-time token emailed to someone who forgot their password."""
+
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    token: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class GuestCampaign(Base):
+    """A time-limited link that lets non-logged-in guests upload photos to a
+    circle (for an event or campaign). The owner sets and can extend the window."""
+
+    __tablename__ = "guest_campaigns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    circle_id: Mapped[int] = mapped_column(ForeignKey("memory_circles.id"), index=True)
+    token: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(220))
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    require_email_verify: Mapped[bool] = mapped_column(Boolean, default=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
+
+class GuestUploadSession(Base):
+    """A guest's lightweight identity for a campaign: a name and email, no
+    account. The email is confirmed with a one-time code when required."""
+
+    __tablename__ = "guest_upload_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    campaign_id: Mapped[int] = mapped_column(ForeignKey("guest_campaigns.id"), index=True)
+    guest_name: Mapped[str] = mapped_column(String(160))
+    guest_email: Mapped[str] = mapped_column(String(255), index=True)
+    token: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    verify_code: Mapped[str] = mapped_column(String(12), default="")
+    verify_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)

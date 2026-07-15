@@ -885,3 +885,102 @@ def test_photo_without_exif_still_gets_a_date_label(client):
     assert entry["caption"] == ""
     assert entry["date_label"] != ""
     assert "," in entry["date_label"]
+
+
+def test_change_password(client):
+    token = register(client, "changer@test.com", "Changer")
+    bad = client.post("/auth/change-password",
+                      json={"current_password": "wrong", "new_password": "NewPass123!"},
+                      headers=auth(token))
+    assert bad.status_code == 400
+    ok = client.post("/auth/change-password",
+                     json={"current_password": "Password123!", "new_password": "NewPass123!"},
+                     headers=auth(token))
+    assert ok.status_code == 200, ok.text
+    # Old password no longer works; new one does.
+    assert client.post("/auth/login", json={"email": "changer@test.com", "password": "Password123!"}).status_code == 401
+    assert client.post("/auth/login", json={"email": "changer@test.com", "password": "NewPass123!"}).status_code == 200
+
+
+def _reset_token_for(email):
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+    from app.database import engine
+    from app.models import PasswordResetToken, User
+    with Session(engine) as session:
+        uid = session.scalar(select(User.id).where(User.email == email))
+        return session.scalar(
+            select(PasswordResetToken.token)
+            .where(PasswordResetToken.user_id == uid)
+            .order_by(PasswordResetToken.created_at.desc())
+        )
+
+
+def test_forgot_and_reset_password(client):
+    register(client, "forgot@test.com", "Forgetful")
+    # Unknown email still returns 200 (no account enumeration).
+    assert client.post("/auth/forgot-password", json={"email": "nobody@test.com"}).status_code == 200
+    assert client.post("/auth/forgot-password", json={"email": "forgot@test.com"}).status_code == 200
+
+    token = _reset_token_for("forgot@test.com")
+    assert token
+    reset = client.post("/auth/reset-password", json={"token": token, "new_password": "Reset123!"})
+    assert reset.status_code == 200, reset.text
+    assert client.post("/auth/login", json={"email": "forgot@test.com", "password": "Reset123!"}).status_code == 200
+    # The token cannot be reused.
+    assert client.post("/auth/reset-password", json={"token": token, "new_password": "Again123!"}).status_code == 400
+
+
+def test_guest_campaign_upload_flow(client):
+    circle_id, owner, approver, _contributor, _viewer = setup_circle(client)
+    # No email verification so the test doesn't need a code.
+    campaign = client.post(f"/circles/{circle_id}/campaigns",
+                           json={"title": "Reunion 2026", "require_email_verify": False},
+                           headers=auth(owner)).json()
+    token = campaign["token"]
+    assert campaign["is_open"] is True
+
+    reg = client.post(f"/campaigns/{token}/guest", json={"name": "Aunt May", "email": "may@guest.com"})
+    assert reg.status_code == 200, reg.text
+    guest_token = reg.json()["guest_token"]
+
+    up = client.post(f"/campaigns/{token}/upload",
+                     data={"guest_token": guest_token, "caption": "At the park"},
+                     files={"file": ("p.jpg", image_file(), "image/jpeg")})
+    assert up.status_code == 200, up.text
+    assert up.json()["pending"] is True
+
+    # It shows up in the reviewer queue, attributed to the guest, and is pending.
+    pending = client.get(f"/circles/{circle_id}/memories?status=pending", headers=auth(owner)).json()
+    guest_mem = next(m for m in pending if m.get("guest_name") == "Aunt May")
+    assert guest_mem["approval_status"] == "pending"
+
+    approve_all_reviewers(client, circle_id, guest_mem["id"], owner, approver)
+
+    # Now the guest gallery (no login) shows the approved photo.
+    view = client.get(f"/campaigns/{token}").json()
+    assert len(view["gallery"]) == 1
+    assert view["gallery"][0]["thumbnail_url"].startswith(f"/campaigns/{token}/assets/")
+
+    # Revoking closes the link.
+    client.post(f"/circles/{circle_id}/campaigns/{campaign['id']}/revoke", headers=auth(owner))
+    assert client.post(f"/campaigns/{token}/upload",
+                       data={"guest_token": guest_token},
+                       files={"file": ("p2.jpg", image_file(color=(1, 2, 3)), "image/jpeg")}).status_code == 410
+
+
+def test_guest_campaign_email_verification(client):
+    circle_id, owner, _approver, _contributor, _viewer = setup_circle(client)
+    campaign = client.post(f"/circles/{circle_id}/campaigns",
+                           json={"title": "Gala", "require_email_verify": True},
+                           headers=auth(owner)).json()
+    token = campaign["token"]
+    reg = client.post(f"/campaigns/{token}/guest", json={"name": "Guest", "email": "g@guest.com"})
+    # With no email configured in tests, the guest is let in directly.
+    assert reg.status_code == 200, reg.text
+    assert "guest_token" in reg.json()
+
+
+def test_only_owner_manages_campaigns(client):
+    circle_id, _owner, approver, _contributor, _viewer = setup_circle(client)
+    assert client.post(f"/circles/{circle_id}/campaigns", json={"title": "X"}, headers=auth(approver)).status_code == 403

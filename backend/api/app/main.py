@@ -29,15 +29,19 @@ from .models import (
     CircleJoinRequest,
     CircleMember,
     CircleMergeRequest,
+    GuestCampaign,
+    GuestUploadSession,
     MemoryCircle,
     MemoryItem,
     Notification,
     NotificationSubscription,
+    PasswordResetToken,
     PhotoAsset,
     PhotoSource,
     SharePackage,
     User,
 )
+from .email import APP_BASE_URL, email_enabled, send_guest_verify_code, send_password_reset
 from .notifications import deliver_notification
 
 
@@ -138,6 +142,26 @@ def ensure_circle_merge_support():
     Base.metadata.tables["circle_merge_requests"].create(bind=engine, checkfirst=True)
 
 
+def ensure_account_and_campaign_support():
+    """Creates password-reset and guest-campaign tables and adds guest
+    attribution columns to memory_items for databases created before them."""
+    Base.metadata.tables["password_reset_tokens"].create(bind=engine, checkfirst=True)
+    Base.metadata.tables["guest_campaigns"].create(bind=engine, checkfirst=True)
+    Base.metadata.tables["guest_upload_sessions"].create(bind=engine, checkfirst=True)
+    inspector = sa_inspect(engine)
+    if "memory_items" in inspector.get_table_names():
+        existing = {column["name"] for column in inspector.get_columns("memory_items")}
+        additions = {
+            "guest_name": "VARCHAR(160)",
+            "guest_email": "VARCHAR(255)",
+            "campaign_id": "INTEGER",
+        }
+        with engine.begin() as connection:
+            for column_name, definition in additions.items():
+                if column_name not in existing:
+                    connection.execute(text(f"ALTER TABLE memory_items ADD COLUMN {column_name} {definition}"))
+
+
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
@@ -146,6 +170,7 @@ def startup():
     ensure_memory_approval_columns()
     ensure_notification_tables()
     ensure_circle_merge_support()
+    ensure_account_and_campaign_support()
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
 
@@ -158,6 +183,44 @@ class UserIn(BaseModel):
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: str
+
+
+class CampaignIn(BaseModel):
+    title: str
+    note: str = ""
+    expires_at: Optional[datetime] = None
+    require_email_verify: bool = True
+
+
+class CampaignPatch(BaseModel):
+    title: Optional[str] = None
+    note: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    require_email_verify: Optional[bool] = None
+
+
+class GuestRegisterIn(BaseModel):
+    name: str
+    email: EmailStr
+
+
+class GuestVerifyIn(BaseModel):
+    email: EmailStr
+    code: str
 
 
 class CircleIn(BaseModel):
@@ -367,6 +430,7 @@ def serialize_memory(memory: MemoryItem, approvals_needed: Optional[int] = None)
         "location_text": memory.location_text,
         "people_json": json.loads(memory.people_json or "[]"),
         "submitted_by": memory.submitted_by,
+        "guest_name": getattr(memory, "guest_name", None),
         "approval_status": memory.approval_status,
         "approval_votes": votes,
         "approval": {
@@ -762,6 +826,50 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
     user = db.scalar(select(User).where(User.email == payload.email.lower()))
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    return {"token": create_access_token(user), "user": user_public(user)}
+
+
+@app.post("/auth/change-password")
+def change_password(payload: ChangePasswordIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Your current password is incorrect")
+    if len(payload.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Choose a password with at least 8 characters")
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
+    return {"status": "ok"}
+
+
+@app.post("/auth/forgot-password")
+def forgot_password(payload: ForgotPasswordIn, db: Session = Depends(get_db)):
+    # Always report success so this can't be used to discover which emails
+    # have accounts.
+    user = db.scalar(select(User).where(User.email == payload.email.lower()))
+    if user:
+        token = secrets.token_urlsafe(32)
+        db.add(PasswordResetToken(
+            user_id=user.id,
+            token=token,
+            expires_at=datetime.utcnow() + timedelta(hours=1),
+        ))
+        db.commit()
+        send_password_reset(user.email, f"{APP_BASE_URL}/?reset={token}")
+    return {"status": "ok", "email_enabled": email_enabled()}
+
+
+@app.post("/auth/reset-password")
+def reset_password(payload: ResetPasswordIn, db: Session = Depends(get_db)):
+    record = db.scalar(select(PasswordResetToken).where(PasswordResetToken.token == payload.token))
+    if not record or record.used_at is not None or record.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired")
+    if len(payload.new_password) < 8:
+        raise HTTPException(status_code=400, detail="Choose a password with at least 8 characters")
+    user = db.get(User, record.user_id)
+    if not user:
+        raise HTTPException(status_code=400, detail="This reset link is invalid or has expired")
+    user.password_hash = hash_password(payload.new_password)
+    record.used_at = datetime.utcnow()
+    db.commit()
     return {"token": create_access_token(user), "user": user_public(user)}
 
 
@@ -1393,19 +1501,21 @@ def patch_member(circle_id: int, member_id: int, payload: MemberPatch, db: Sessi
     return serialize_member(member)
 
 
-@app.post("/circles/{circle_id}/assets/upload")
-def upload_asset(
+def store_asset_bytes(
+    db: Session,
     circle_id: int,
-    file: UploadFile = File(...),
-    source_type: str = Form("local_upload"),
-    capture_date: Optional[str] = Form(None),
-    db: Session = Depends(get_db),
-    user: User = Depends(current_user),
-):
-    require_member(db, circle_id, user, WRITE_ROLES)
-    if file.content_type not in ALLOWED_IMAGE_TYPES:
+    raw: bytes,
+    content_type: Optional[str],
+    filename: Optional[str],
+    created_by: int,
+    source_type: str = "local_upload",
+    capture_date_override: Optional[datetime] = None,
+) -> PhotoAsset:
+    """Processes and stores an uploaded image (dedupe, display + thumbnail
+    sizes, disk or db). Does not commit — the caller does. Shared by the
+    logged-in upload endpoint and guest campaign uploads."""
+    if content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail="Only JPEG, PNG, and WebP images are supported")
-    raw = file.file.read()
     content_hash = hashlib.sha256(raw).hexdigest()
     existing = db.scalar(
         select(PhotoAsset).where(
@@ -1414,10 +1524,8 @@ def upload_asset(
         )
     )
     if existing:
-        # Same photo already lives in this circle; reuse it instead of
-        # storing a duplicate copy.
-        return serialize_asset(existing)
-    source = PhotoSource(user_id=user.id, source_type=source_type, source_name=file.filename or "Local upload")
+        return existing
+    source = PhotoSource(user_id=created_by, source_type=source_type, source_name=filename or "Local upload")
     db.add(source)
     db.flush()
     try:
@@ -1446,7 +1554,7 @@ def upload_asset(
     else:
         circle_dir = STORAGE_ROOT / str(circle_id)
         circle_dir.mkdir(parents=True, exist_ok=True)
-        extension = ALLOWED_IMAGE_TYPES[file.content_type]
+        extension = ALLOWED_IMAGE_TYPES[content_type]
         base_name = f"{content_hash[:20]}"
         (circle_dir / f"{base_name}-source{extension}").write_bytes(raw)
         thumbnail_file = circle_dir / f"{base_name}-thumb.jpg"
@@ -1462,21 +1570,44 @@ def upload_asset(
         source_type=source_type,
         source_reference=f"upload:{content_hash}",
         content_hash=content_hash,
-        original_filename=file.filename or "upload",
-        mime_type=file.content_type or "application/octet-stream",
+        original_filename=filename or "upload",
+        mime_type=content_type or "application/octet-stream",
         file_size=len(raw),
         width=width,
         height=height,
-        capture_date=parse_form_datetime(capture_date) or detected_capture_date,
+        capture_date=capture_date_override or detected_capture_date,
         thumbnail_path=thumbnail_path,
         display_path=display_path,
         thumbnail_blob=thumbnail_blob,
         display_blob=display_blob,
-        created_by=user.id,
+        created_by=created_by,
     )
     db.add(asset)
     db.flush()
-    log_activity(db, circle_id, user.id, "asset.uploaded", "asset", asset.id, {"filename": asset.original_filename})
+    log_activity(db, circle_id, created_by, "asset.uploaded", "asset", asset.id, {"filename": asset.original_filename})
+    return asset
+
+
+@app.post("/circles/{circle_id}/assets/upload")
+def upload_asset(
+    circle_id: int,
+    file: UploadFile = File(...),
+    source_type: str = Form("local_upload"),
+    capture_date: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(current_user),
+):
+    require_member(db, circle_id, user, WRITE_ROLES)
+    asset = store_asset_bytes(
+        db,
+        circle_id,
+        file.file.read(),
+        file.content_type,
+        file.filename,
+        user.id,
+        source_type=source_type,
+        capture_date_override=parse_form_datetime(capture_date),
+    )
     db.commit()
     db.refresh(asset)
     return serialize_asset(asset)
@@ -1980,6 +2111,258 @@ def get_public_share_asset(token: str, asset_id: int, variant: str, db: Session 
         raise HTTPException(status_code=404, detail="Asset not found")
     asset = db.get(PhotoAsset, asset_id)
     if not asset or asset.circle_id != package.circle_id:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    blob = asset.thumbnail_blob if variant == "thumbnail" else asset.display_blob
+    if blob is not None:
+        return Response(content=blob, media_type="image/jpeg")
+    path = Path(asset.thumbnail_path if variant == "thumbnail" else asset.display_path)
+    if not str(path) or not path.exists():
+        raise HTTPException(status_code=404, detail="Asset file missing")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+# ---- Guest-upload campaigns (time-limited, no-login) ----
+
+GUEST_UPLOAD_LIMIT = 100  # photos per guest email per campaign
+
+
+def campaign_is_open(campaign: GuestCampaign) -> bool:
+    if campaign.revoked_at is not None:
+        return False
+    if campaign.expires_at is not None and campaign.expires_at <= datetime.utcnow():
+        return False
+    return True
+
+
+def serialize_campaign(db: Session, campaign: GuestCampaign) -> dict:
+    circle = db.get(MemoryCircle, campaign.circle_id)
+    return {
+        "id": campaign.id,
+        "circle_id": campaign.circle_id,
+        "circle_name": circle.name if circle else "",
+        "token": campaign.token,
+        "title": campaign.title,
+        "note": campaign.note,
+        "expires_at": campaign.expires_at,
+        "require_email_verify": campaign.require_email_verify,
+        "revoked": campaign.revoked_at is not None,
+        "is_open": campaign_is_open(campaign),
+        "share_url": f"{APP_BASE_URL}/?campaign={campaign.token}",
+        "created_at": campaign.created_at,
+    }
+
+
+def require_open_campaign(db: Session, token: str) -> GuestCampaign:
+    campaign = db.scalar(select(GuestCampaign).where(GuestCampaign.token == token))
+    if not campaign:
+        raise HTTPException(status_code=404, detail="This upload link was not found")
+    if not campaign_is_open(campaign):
+        raise HTTPException(status_code=410, detail="This upload link is closed")
+    return campaign
+
+
+def campaign_gallery(db: Session, campaign: GuestCampaign, limit: int = 60) -> list[dict]:
+    """Approved memories in the campaign's circle, with guest-safe image URLs."""
+    memories = db.scalars(
+        select(MemoryItem)
+        .where(MemoryItem.circle_id == campaign.circle_id, MemoryItem.approval_status == "approved")
+        .order_by(MemoryItem.created_at.desc())
+        .limit(limit)
+    ).all()
+    entries = []
+    for memory in memories:
+        entry = memory_entry(memory)
+        entry["display_url"] = f"/campaigns/{campaign.token}/assets/{memory.asset_id}/display"
+        entry["thumbnail_url"] = f"/campaigns/{campaign.token}/assets/{memory.asset_id}/thumbnail"
+        entries.append(entry)
+    return entries
+
+
+# Owner-facing campaign management.
+
+@app.post("/circles/{circle_id}/campaigns")
+def create_campaign(circle_id: int, payload: CampaignIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, {"owner"})
+    campaign = GuestCampaign(
+        circle_id=circle_id,
+        token=secrets.token_urlsafe(24),
+        title=payload.title.strip() or "Guest uploads",
+        note=payload.note,
+        created_by=user.id,
+        expires_at=payload.expires_at,
+        require_email_verify=payload.require_email_verify,
+    )
+    db.add(campaign)
+    db.flush()
+    log_activity(db, circle_id, user.id, "campaign.created", "campaign", campaign.id, {"title": campaign.title})
+    db.commit()
+    db.refresh(campaign)
+    return serialize_campaign(db, campaign)
+
+
+@app.get("/circles/{circle_id}/campaigns")
+def list_campaigns(circle_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, {"owner"})
+    campaigns = db.scalars(
+        select(GuestCampaign).where(GuestCampaign.circle_id == circle_id).order_by(GuestCampaign.created_at.desc())
+    ).all()
+    return [serialize_campaign(db, campaign) for campaign in campaigns]
+
+
+@app.patch("/circles/{circle_id}/campaigns/{campaign_id}")
+def patch_campaign(circle_id: int, campaign_id: int, payload: CampaignPatch, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, {"owner"})
+    campaign = db.get(GuestCampaign, campaign_id)
+    if not campaign or campaign.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(campaign, field, value)
+    log_activity(db, circle_id, user.id, "campaign.updated", "campaign", campaign_id, payload.model_dump(exclude_unset=True))
+    db.commit()
+    db.refresh(campaign)
+    return serialize_campaign(db, campaign)
+
+
+@app.post("/circles/{circle_id}/campaigns/{campaign_id}/revoke")
+def revoke_campaign(circle_id: int, campaign_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_member(db, circle_id, user, {"owner"})
+    campaign = db.get(GuestCampaign, campaign_id)
+    if not campaign or campaign.circle_id != circle_id:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    campaign.revoked_at = datetime.utcnow()
+    log_activity(db, circle_id, user.id, "campaign.revoked", "campaign", campaign_id)
+    db.commit()
+    return {"status": "revoked"}
+
+
+# Guest-facing endpoints (no login).
+
+@app.get("/campaigns/{token}")
+def get_campaign(token: str, db: Session = Depends(get_db)):
+    campaign = db.scalar(select(GuestCampaign).where(GuestCampaign.token == token))
+    if not campaign:
+        raise HTTPException(status_code=404, detail="This upload link was not found")
+    data = serialize_campaign(db, campaign)
+    data["gallery"] = campaign_gallery(db, campaign) if campaign_is_open(campaign) else []
+    return data
+
+
+@app.post("/campaigns/{token}/guest")
+def register_guest(token: str, payload: GuestRegisterIn, db: Session = Depends(get_db)):
+    campaign = require_open_campaign(db, token)
+    session = GuestUploadSession(
+        campaign_id=campaign.id,
+        guest_name=payload.name.strip() or "Guest",
+        guest_email=payload.email.lower(),
+        token=secrets.token_urlsafe(24),
+        verified=not campaign.require_email_verify,
+    )
+    if campaign.require_email_verify:
+        session.verify_code = f"{secrets.randbelow(1000000):06d}"
+        session.verify_expires_at = datetime.utcnow() + timedelta(minutes=15)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    if campaign.require_email_verify:
+        sent = send_guest_verify_code(session.guest_email, campaign.title, session.verify_code)
+        # If email isn't configured, don't strand the guest — let them in.
+        if not sent and not email_enabled():
+            session.verified = True
+            db.commit()
+            return {"guest_token": session.token, "needs_verification": False}
+        return {"needs_verification": True}
+    return {"guest_token": session.token, "needs_verification": False}
+
+
+@app.post("/campaigns/{token}/guest/verify")
+def verify_guest(token: str, payload: GuestVerifyIn, db: Session = Depends(get_db)):
+    campaign = require_open_campaign(db, token)
+    session = db.scalar(
+        select(GuestUploadSession)
+        .where(
+            GuestUploadSession.campaign_id == campaign.id,
+            GuestUploadSession.guest_email == payload.email.lower(),
+        )
+        .order_by(GuestUploadSession.created_at.desc())
+    )
+    if not session or session.verify_code != payload.code.strip():
+        raise HTTPException(status_code=400, detail="That code is not correct")
+    if session.verify_expires_at and session.verify_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="That code has expired")
+    session.verified = True
+    db.commit()
+    return {"guest_token": session.token, "needs_verification": False}
+
+
+@app.post("/campaigns/{token}/upload")
+def guest_upload(
+    token: str,
+    guest_token: str = Form(...),
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    campaign = require_open_campaign(db, token)
+    session = db.scalar(
+        select(GuestUploadSession).where(
+            GuestUploadSession.token == guest_token,
+            GuestUploadSession.campaign_id == campaign.id,
+        )
+    )
+    if not session or not session.verified:
+        raise HTTPException(status_code=403, detail="Please confirm your details before uploading")
+    already = db.scalar(
+        select(func.count(MemoryItem.id)).where(
+            MemoryItem.campaign_id == campaign.id,
+            MemoryItem.guest_email == session.guest_email,
+        )
+    )
+    if (already or 0) >= GUEST_UPLOAD_LIMIT:
+        raise HTTPException(status_code=429, detail="You've reached the upload limit for this event")
+    asset = store_asset_bytes(
+        db,
+        campaign.circle_id,
+        file.file.read(),
+        file.content_type,
+        file.filename,
+        campaign.created_by,
+        source_type="guest_upload",
+    )
+    memory = MemoryItem(
+        circle_id=campaign.circle_id,
+        asset_id=asset.id,
+        caption=caption.strip(),
+        submitted_by=campaign.created_by,
+        guest_name=session.guest_name,
+        guest_email=session.guest_email,
+        campaign_id=campaign.id,
+        approval_status="pending",
+    )
+    db.add(memory)
+    db.flush()
+    queue_approval_notifications(db, memory)
+    log_activity(db, campaign.circle_id, campaign.created_by, "campaign.guest_uploaded", "memory", memory.id, {"guest": session.guest_name})
+    db.commit()
+    return {"status": "uploaded", "pending": True}
+
+
+@app.get("/campaigns/{token}/assets/{asset_id}/{variant}")
+def get_campaign_asset(token: str, asset_id: int, variant: str, db: Session = Depends(get_db)):
+    if variant not in {"thumbnail", "display"}:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    campaign = require_open_campaign(db, token)
+    asset = db.get(PhotoAsset, asset_id)
+    if not asset or asset.circle_id != campaign.circle_id:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    # Only serve assets tied to an approved memory in the circle.
+    approved = db.scalar(
+        select(MemoryItem.id).where(
+            MemoryItem.asset_id == asset_id,
+            MemoryItem.circle_id == campaign.circle_id,
+            MemoryItem.approval_status == "approved",
+        )
+    )
+    if not approved:
         raise HTTPException(status_code=404, detail="Asset not found")
     blob = asset.thumbnail_blob if variant == "thumbnail" else asset.display_blob
     if blob is not None:

@@ -21,3 +21,12 @@ services:
       # Paste your Neon (or any) Postgres connection string in the dashboard.
       - key: DATABASE_URL
         sync: false
+      # Public site URL, used to build password-reset and campaign links.
+      - key: APP_BASE_URL
+        value: https://omoidenowa.com
+      # Transactional email (Resend). Password recovery and guest email
+      # verification stay disabled until these are set in the dashboard.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
