@@ -7,6 +7,7 @@ import '../i18n/index.dart';
 import '../screens/add_memory_screen.dart';
 import '../screens/albums_screen.dart';
 import '../screens/bulk_add_screen.dart';
+import '../screens/campaigns_screen.dart';
 import '../screens/circle_dashboard_screen.dart';
 import '../screens/health_screen.dart';
 import '../screens/members_screen.dart';
@@ -25,6 +26,7 @@ enum CircleSection {
   review,
   albums,
   members,
+  campaigns,
   health,
   settings,
 }
@@ -115,6 +117,12 @@ class _CircleShellState extends State<CircleShell> {
           label: context.t('nav.members'),
           icon: Icons.group_outlined
         ),
+        if (role.isOwner)
+          (
+            section: CircleSection.campaigns,
+            label: 'Guest Uploads',
+            icon: Icons.qr_code_2_outlined
+          ),
         (
           section: CircleSection.health,
           label: context.t('nav.health'),
@@ -135,6 +143,7 @@ class _CircleShellState extends State<CircleShell> {
         CircleSection.review => context.t('nav.review'),
         CircleSection.albums => context.t('nav.albums'),
         CircleSection.members => context.t('nav.members'),
+        CircleSection.campaigns => 'Guest Uploads',
         CircleSection.health => context.t('nav.health'),
         CircleSection.settings => context.t('nav.settings'),
       };
@@ -165,6 +174,8 @@ class _CircleShellState extends State<CircleShell> {
           AlbumsView(api: widget.api, circle: _circle, role: role),
         CircleSection.members =>
           MembersView(api: widget.api, circle: _circle, role: role),
+        CircleSection.campaigns =>
+          CampaignsView(api: widget.api, circle: _circle),
         CircleSection.health => HealthView(api: widget.api, circle: _circle),
         CircleSection.settings => SettingsView(
             api: widget.api,

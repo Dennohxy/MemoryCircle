@@ -7,6 +7,8 @@ import '../api/models.dart';
 import '../i18n/index.dart';
 import '../screens/auth_screen.dart';
 import '../screens/circles_screen.dart';
+import '../screens/guest_campaign_screen.dart';
+import '../screens/reset_password_screen.dart';
 import 'push_notifications.dart';
 import 'theme.dart';
 
@@ -35,6 +37,12 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
   /// (`?join=...`), applied once the person is signed in.
   String? _pendingJoinToken;
 
+  /// A campaign token (`?campaign=...`): opens the no-login guest upload flow.
+  String? _campaignToken;
+
+  /// A password-reset token (`?reset=...`): opens the reset screen.
+  String? _resetToken;
+
   /// Bumped after joining a circle so the circle list reloads.
   int _circlesReloadKey = 0;
 
@@ -42,8 +50,13 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
   void initState() {
     super.initState();
     _api.onSessionExpired = _sessionExpired;
-    final token = Uri.base.queryParameters['join'];
+    final params = Uri.base.queryParameters;
+    final token = params['join'];
     if (token != null && token.isNotEmpty) _pendingJoinToken = token;
+    final campaign = params['campaign'];
+    if (campaign != null && campaign.isNotEmpty) _campaignToken = campaign;
+    final reset = params['reset'];
+    if (reset != null && reset.isNotEmpty) _resetToken = reset;
     unawaited(_i18n.load());
     _restoreSession();
   }
@@ -125,17 +138,30 @@ class _MemoryCircleAppState extends State<MemoryCircleApp> {
           scaffoldMessengerKey: _messengerKey,
           home: !_ready
               ? const _SplashScreen()
-              : _user == null
-                  ? AuthScreen(
-                      api: _api,
-                      onSignedIn: _onSignedIn,
-                    )
-                  : CirclesScreen(
-                      key: ValueKey(_circlesReloadKey),
-                      api: _api,
-                      user: _user!,
-                      onSignOut: _signOut,
-                    ),
+              // A campaign link opens the guest flow for anyone, logged in or
+              // not — it never requires an account.
+              : _campaignToken != null
+                  ? GuestCampaignScreen(api: _api, token: _campaignToken!)
+                  : (_resetToken != null && _user == null)
+                      ? ResetPasswordScreen(
+                          api: _api,
+                          token: _resetToken!,
+                          onDone: (user) => setState(() {
+                            _resetToken = null;
+                            _user = user;
+                          }),
+                        )
+                      : _user == null
+                          ? AuthScreen(
+                              api: _api,
+                              onSignedIn: _onSignedIn,
+                            )
+                          : CirclesScreen(
+                              key: ValueKey(_circlesReloadKey),
+                              api: _api,
+                              user: _user!,
+                              onSignOut: _signOut,
+                            ),
         ),
       ),
     );

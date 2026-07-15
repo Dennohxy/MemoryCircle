@@ -158,6 +158,37 @@ class ApiClient {
     return _startSession(data);
   }
 
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    await _post('/auth/change-password', {
+      'current_password': currentPassword,
+      'new_password': newPassword,
+    });
+  }
+
+  /// Requests a password-reset email. Always succeeds (the server never
+  /// reveals whether an account exists). Returns whether email is configured.
+  Future<bool> forgotPassword(String email) async {
+    final data = await _post('/auth/forgot-password', {'email': email})
+        as Map<String, dynamic>;
+    return data['email_enabled'] == true;
+  }
+
+  /// Completes a reset with the token from the emailed link, signing the
+  /// person in with their new password.
+  Future<UserProfile> resetPassword({
+    required String token,
+    required String newPassword,
+  }) async {
+    final data = await _post('/auth/reset-password', {
+      'token': token,
+      'new_password': newPassword,
+    }) as Map<String, dynamic>;
+    return _startSession(data);
+  }
+
   Future<UserProfile> _startSession(Map<String, dynamic> data) async {
     _token = data['token'] as String?;
     _imageCache.clear();
@@ -440,6 +471,97 @@ class ApiClient {
       for (final entry in matches.entries)
         entry.key: PhotoAsset.fromJson(entry.value as Map<String, dynamic>),
     };
+  }
+
+  // ---- Guest-upload campaigns (owner side) ----
+
+  Future<GuestCampaign> createCampaign(
+    int circleId, {
+    required String title,
+    String note = '',
+    DateTime? expiresAt,
+    bool requireEmailVerify = true,
+  }) async =>
+      GuestCampaign.fromJson(await _post('/circles/$circleId/campaigns', {
+        'title': title,
+        'note': note,
+        if (expiresAt != null)
+          'expires_at': expiresAt.toUtc().toIso8601String(),
+        'require_email_verify': requireEmailVerify,
+      }) as Map<String, dynamic>);
+
+  Future<List<GuestCampaign>> listCampaigns(int circleId) async => [
+        for (final item
+            in await _get('/circles/$circleId/campaigns') as List<dynamic>)
+          GuestCampaign.fromJson(item as Map<String, dynamic>),
+      ];
+
+  Future<GuestCampaign> updateCampaign(
+    int circleId,
+    int campaignId, {
+    DateTime? expiresAt,
+    String? title,
+  }) async =>
+      GuestCampaign.fromJson(
+          await _patchJson('/circles/$circleId/campaigns/$campaignId', {
+        if (expiresAt != null)
+          'expires_at': expiresAt.toUtc().toIso8601String(),
+        if (title != null) 'title': title,
+      }) as Map<String, dynamic>);
+
+  Future<void> revokeCampaign(int circleId, int campaignId) async =>
+      _post('/circles/$circleId/campaigns/$campaignId/revoke');
+
+  // ---- Guest-upload campaigns (guest side, no login) ----
+
+  Future<Map<String, dynamic>> getCampaign(String token) async =>
+      await _get('/campaigns/$token') as Map<String, dynamic>;
+
+  /// Registers a guest (name + email). Returns {'needs_verification': bool,
+  /// 'guest_token': String?}.
+  Future<Map<String, dynamic>> registerGuest(
+    String token, {
+    required String name,
+    required String email,
+  }) async =>
+      await _post('/campaigns/$token/guest', {'name': name, 'email': email})
+          as Map<String, dynamic>;
+
+  Future<String> verifyGuest(
+    String token, {
+    required String email,
+    required String code,
+  }) async {
+    final data = await _post(
+            '/campaigns/$token/guest/verify', {'email': email, 'code': code})
+        as Map<String, dynamic>;
+    return data['guest_token'] as String;
+  }
+
+  Future<void> guestUpload(
+    String token, {
+    required String guestToken,
+    required PlatformFile file,
+    String caption = '',
+  }) async {
+    final request =
+        http.MultipartRequest('POST', _uri('/campaigns/$token/upload'));
+    request.fields['guest_token'] = guestToken;
+    request.fields['caption'] = caption;
+    final mediaType = _imageMediaType(file.name);
+    if (file.bytes != null) {
+      request.files.add(http.MultipartFile.fromBytes('file', file.bytes!,
+          filename: file.name, contentType: mediaType));
+    } else if (file.path != null) {
+      request.files.add(await http.MultipartFile.fromPath('file', file.path!,
+          filename: file.name, contentType: mediaType));
+    } else {
+      throw ApiException(
+          'We could not read that photo. Please choose it again.');
+    }
+    final response =
+        await _run(() async => http.Response.fromStream(await request.send()));
+    _decode(response);
   }
 
   /// Fetches an image with the Authorization header so protected thumbnails

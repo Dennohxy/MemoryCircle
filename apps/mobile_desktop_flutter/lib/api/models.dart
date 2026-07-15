@@ -177,6 +177,43 @@ class MergeRequest {
   final String targetName;
 }
 
+/// A time-limited link that lets non-logged-in guests upload photos.
+class GuestCampaign {
+  const GuestCampaign({
+    required this.id,
+    required this.token,
+    required this.title,
+    required this.shareUrl,
+    required this.isOpen,
+    required this.revoked,
+    this.note = '',
+    this.circleName = '',
+    this.expiresAt,
+  });
+
+  factory GuestCampaign.fromJson(Map<String, dynamic> json) => GuestCampaign(
+        id: _asInt(json['id']),
+        token: _asText(json['token']),
+        title: _asText(json['title']),
+        shareUrl: _asText(json['share_url']),
+        isOpen: json['is_open'] == true,
+        revoked: json['revoked'] == true,
+        note: _asText(json['note']),
+        circleName: _asText(json['circle_name']),
+        expiresAt: _asDate(json['expires_at']),
+      );
+
+  final int id;
+  final String token;
+  final String title;
+  final String shareUrl;
+  final bool isOpen;
+  final bool revoked;
+  final String note;
+  final String circleName;
+  final DateTime? expiresAt;
+}
+
 /// A registered person found via member search, with whether they are
 /// already in the circle.
 class DirectoryPerson {

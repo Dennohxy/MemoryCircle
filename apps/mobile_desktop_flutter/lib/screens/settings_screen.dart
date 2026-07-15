@@ -148,13 +148,25 @@ class _SettingsViewState extends State<SettingsView> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(context.t('settings.moreToCome'),
-                          style: theme.textTheme.titleMedium),
+                      Text('Your account', style: theme.textTheme.titleMedium),
                       const SizedBox(height: Insets.xs),
                       Text(
-                        context.t('settings.moreText'),
+                        'Change the password you use to sign in.',
                         style: theme.textTheme.bodyMedium
                             ?.copyWith(color: AppColors.softInk),
+                      ),
+                      const SizedBox(height: Insets.sm),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: OutlinedButton.icon(
+                          onPressed: () => showDialog<void>(
+                            context: context,
+                            builder: (_) =>
+                                _ChangePasswordDialog(api: widget.api),
+                          ),
+                          icon: const Icon(Icons.lock_outline, size: 18),
+                          label: const Text('Change password'),
+                        ),
                       ),
                     ],
                   ),
@@ -164,6 +176,101 @@ class _SettingsViewState extends State<SettingsView> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ChangePasswordDialog extends StatefulWidget {
+  const _ChangePasswordDialog({required this.api});
+
+  final ApiClient api;
+
+  @override
+  State<_ChangePasswordDialog> createState() => _ChangePasswordDialogState();
+}
+
+class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
+  final _currentController = TextEditingController();
+  final _newController = TextEditingController();
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _currentController.dispose();
+    _newController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_newController.text.length < 8) {
+      setState(() => _error = 'Choose at least 8 characters.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await widget.api.changePassword(
+        currentPassword: _currentController.text,
+        newPassword: _newController.text,
+      );
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      messenger.showSnackBar(
+          const SnackBar(content: Text('Your password was changed.')));
+    } on ApiException catch (error) {
+      setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Change password'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _currentController,
+              obscureText: true,
+              decoration: appInput('Current password'),
+            ),
+            const SizedBox(height: Insets.md),
+            TextField(
+              controller: _newController,
+              obscureText: true,
+              decoration: appInput('New password'),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: Insets.sm),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(_error!,
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodySmall
+                        ?.copyWith(color: AppColors.attention)),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel')),
+        FilledButton(
+          onPressed: _busy ? null : _submit,
+          child: Text(_busy ? 'Saving…' : 'Save'),
+        ),
+      ],
     );
   }
 }

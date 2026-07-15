@@ -245,6 +245,22 @@ class _AuthScreenState extends State<AuthScreen> {
                 ),
               ),
             ),
+            if (!_registerMode)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: _busy
+                      ? null
+                      : () => showDialog<void>(
+                            context: context,
+                            builder: (_) => _ForgotPasswordDialog(
+                              api: widget.api,
+                              initialEmail: _emailController.text.trim(),
+                            ),
+                          ),
+                  child: const Text('Forgot password?'),
+                ),
+              ),
             if (_error != null) ...[
               const SizedBox(height: Insets.md),
               Container(
@@ -435,6 +451,108 @@ class _LandingLanguageSelector extends StatelessWidget {
         padding: EdgeInsets.symmetric(horizontal: Insets.sm),
         child: LanguageSelector(),
       ),
+    );
+  }
+}
+
+class _ForgotPasswordDialog extends StatefulWidget {
+  const _ForgotPasswordDialog({required this.api, this.initialEmail = ''});
+
+  final ApiClient api;
+  final String initialEmail;
+
+  @override
+  State<_ForgotPasswordDialog> createState() => _ForgotPasswordDialogState();
+}
+
+class _ForgotPasswordDialogState extends State<_ForgotPasswordDialog> {
+  late final _emailController =
+      TextEditingController(text: widget.initialEmail);
+  bool _busy = false;
+  bool _sent = false;
+  bool _emailEnabled = true;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final email = _emailController.text.trim();
+    if (!email.contains('@')) return;
+    setState(() => _busy = true);
+    try {
+      final enabled = await widget.api.forgotPassword(email);
+      if (!mounted) return;
+      setState(() {
+        _sent = true;
+        _emailEnabled = enabled;
+      });
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (_sent) {
+      return AlertDialog(
+        title: const Text('Check your email'),
+        content: Text(
+          _emailEnabled
+              ? 'If an account exists for that email, we\'ve sent a link to '
+                  'reset your password. It expires in 1 hour.'
+              : 'Password reset by email isn\'t set up yet. Please contact the '
+                  'person who runs this circle.',
+          style: theme.textTheme.bodyMedium,
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Done'),
+          ),
+        ],
+      );
+    }
+    return AlertDialog(
+      title: const Text('Reset your password'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Enter your email and we\'ll send you a link to set a new password.',
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: AppColors.softInk),
+            ),
+            const SizedBox(height: Insets.md),
+            TextField(
+              controller: _emailController,
+              keyboardType: TextInputType.emailAddress,
+              autofocus: true,
+              decoration: appInput('Email'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _busy ? null : _submit,
+          child: Text(_busy ? 'Sending…' : 'Send link'),
+        ),
+      ],
     );
   }
 }
