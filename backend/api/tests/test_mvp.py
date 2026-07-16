@@ -336,6 +336,13 @@ def test_owner_can_create_and_revoke_public_share_package(client):
     assert public_payload["title"] == "Family Highlights"
     assert public_payload["note"] == "For Auntie"
     assert public_payload["pages"][1]["layout_json"]["memories"][0]["display_url"].startswith("http://testserver/share/")
+    public_asset_url = public_payload["pages"][1]["layout_json"]["memories"][0]["display_url"]
+    public_asset = client.get(public_asset_url)
+    assert public_asset.status_code == 200
+    assert client.get(
+        public_asset_url,
+        headers={"If-None-Match": public_asset.headers["etag"]},
+    ).status_code == 304
 
     packages = client.get(
         f"/circles/{circle_id}/albums/{album['id']}/share-packages",
@@ -984,6 +991,13 @@ def test_guest_campaign_upload_flow(client):
     view = client.get(f"/campaigns/{token}").json()
     assert len(view["gallery"]) == 1
     assert view["gallery"][0]["thumbnail_url"].startswith(f"/campaigns/{token}/assets/")
+    campaign_asset_url = view["gallery"][0]["thumbnail_url"]
+    campaign_asset = client.get(campaign_asset_url)
+    assert campaign_asset.status_code == 200
+    assert client.get(
+        campaign_asset_url,
+        headers={"If-None-Match": campaign_asset.headers["etag"]},
+    ).status_code == 304
 
     # Revoking closes the link.
     client.post(f"/circles/{circle_id}/campaigns/{campaign['id']}/revoke", headers=auth(owner))

@@ -89,8 +89,11 @@ class PhotoAsset(Base):
     display_path: Mapped[str] = mapped_column(String(500), default="")
     # Used when ASSET_STORAGE=db: image bytes live in the database so hosts
     # with ephemeral disks (free tiers) never lose uploads.
-    thumbnail_blob: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
-    display_blob: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    # Blob columns are deferred so metadata/gallery queries do not transfer
+    # every image from the remote database. Media routes load one blob only
+    # after authorization and ETag checks pass.
+    thumbnail_blob: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    display_blob: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True, deferred=True)
     cache_status: Mapped[str] = mapped_column(String(40), default="display_copy")
     availability_status: Mapped[str] = mapped_column(String(60), default="available")
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
@@ -360,7 +363,7 @@ class BrandAsset(Base):
     file_size: Mapped[int] = mapped_column(Integer, default=0)
     content_hash: Mapped[str] = mapped_column(String(128), index=True)
     display_path: Mapped[str] = mapped_column(String(500), default="")
-    display_blob: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    display_blob: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True, deferred=True)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     rights_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)

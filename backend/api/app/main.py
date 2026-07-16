@@ -2275,7 +2275,7 @@ def get_public_share_package(token: str, request: Request, db: Session = Depends
 
 
 @app.get("/share/{token}/assets/{asset_id}/{variant}", name="get_public_share_asset")
-def get_public_share_asset(token: str, asset_id: int, variant: str, db: Session = Depends(get_db)):
+def get_public_share_asset(token: str, asset_id: int, variant: str, request: Request, db: Session = Depends(get_db)):
     if variant not in {"thumbnail", "display"}:
         raise HTTPException(status_code=404, detail="Asset not found")
     package = db.scalar(select(SharePackage).where(SharePackage.token == token))
@@ -2295,13 +2295,18 @@ def get_public_share_asset(token: str, asset_id: int, variant: str, db: Session 
     asset = db.get(PhotoAsset, asset_id)
     if not asset or asset.circle_id != package.circle_id:
         raise HTTPException(status_code=404, detail="Asset not found")
+    etag = f'"{asset.content_hash}-{variant}"'
+    cache_headers = {"Cache-Control": "private, no-cache", "ETag": etag}
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match and etag in {tag.strip() for tag in if_none_match.split(",")}:
+        return Response(status_code=304, headers=cache_headers)
     blob = asset.thumbnail_blob if variant == "thumbnail" else asset.display_blob
     if blob is not None:
-        return Response(content=blob, media_type="image/jpeg")
+        return Response(content=blob, media_type="image/jpeg", headers=cache_headers)
     path = Path(asset.thumbnail_path if variant == "thumbnail" else asset.display_path)
     if not str(path) or not path.exists():
         raise HTTPException(status_code=404, detail="Asset file missing")
-    return FileResponse(path, media_type="image/jpeg")
+    return FileResponse(path, media_type="image/jpeg", headers=cache_headers)
 
 
 # ---- Guest-upload campaigns (time-limited, no-login) ----
@@ -2611,7 +2616,7 @@ def guest_upload(
 
 
 @app.get("/campaigns/{token}/assets/{asset_id}/{variant}")
-def get_campaign_asset(token: str, asset_id: int, variant: str, db: Session = Depends(get_db)):
+def get_campaign_asset(token: str, asset_id: int, variant: str, request: Request, db: Session = Depends(get_db)):
     if variant not in {"thumbnail", "display"}:
         raise HTTPException(status_code=404, detail="Asset not found")
     campaign = require_open_campaign(db, token)
@@ -2637,13 +2642,18 @@ def get_campaign_asset(token: str, asset_id: int, variant: str, db: Session = De
     )
     if not approved:
         raise HTTPException(status_code=404, detail="Asset not found")
+    etag = f'"{asset.content_hash}-{variant}"'
+    cache_headers = {"Cache-Control": "private, no-cache", "ETag": etag}
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match and etag in {tag.strip() for tag in if_none_match.split(",")}:
+        return Response(status_code=304, headers=cache_headers)
     blob = asset.thumbnail_blob if variant == "thumbnail" else asset.display_blob
     if blob is not None:
-        return Response(content=blob, media_type="image/jpeg")
+        return Response(content=blob, media_type="image/jpeg", headers=cache_headers)
     path = Path(asset.thumbnail_path if variant == "thumbnail" else asset.display_path)
     if not str(path) or not path.exists():
         raise HTTPException(status_code=404, detail="Asset file missing")
-    return FileResponse(path, media_type="image/jpeg")
+    return FileResponse(path, media_type="image/jpeg", headers=cache_headers)
 
 
 # ---- Graduation yearbook pilot: themes, contributors, contributions ----
